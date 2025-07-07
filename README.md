@@ -52,12 +52,12 @@ cd ECMSD
 
 ## Test Data
 
-ECMSD includes a test dataset to verify the installation and demonstrate pipeline functionality. The test data consists of ancient DNA sequencing reads from an unknown origin, providing a realistic example for mitochondrial sequence detection.
+ECMSD includes a test dataset to verify the installation and demonstrate pipeline functionality. The test data consists of historic DNA (hDNA) sequencing reads from an unknown origin, providing a realistic example for mitochondrial sequence detection.
 
 ### Test Dataset Details
 
 - **File**: `TestData/merged.fastq.gz` (~37 MB)
-- **Content**: Merged FASTQ reads from ancient DNA sequencing
+- **Content**: Merged FASTQ reads from hDNA sequencing
 - **Purpose**: Pipeline validation and demonstration
 - **Origin**: Unknown sample (for testing purposes only)
 
@@ -69,13 +69,6 @@ To test the pipeline with the provided dataset:
 # Navigate to ECMSD directory
 cd /path/to/ECMSD
 
-# Run the test script
-bash TestData/shell.sh
-```
-
-Or run manually with custom parameters:
-
-```bash
 # Replace <path_to_your_ECMSD_directory> with your actual ECMSD installation path
 bash shell/ECMSD.sh \
     --fwd TestData/merged.fastq.gz \
@@ -127,13 +120,13 @@ A successful test run indicates that:
 
 #### Required Arguments
 
-- `-f, --fwd`: Path to the forward FASTQ file
+- `-f, --fwd`: Path to the forward or single end (e.g. merged) FASTQ file
 - `-o, --out`: Path to the output folder
 
 #### Optional Arguments
 
 - `-r, --rev`: Path to the reverse FASTQ file (for paired-end data)
-- `-m, --merged`: Path to merged FASTQ file
+- `-m, --merged`: Path to merged FASTQ file that should be mapped in addition to the forward and reverse reads
 - `-b, --Binsize`: Bin size for RMUS analysis (default: 1000)
 - `-u, --RMUS-threshold`: RMUS threshold for analysis (default: 0.15)
 - `-q, --mapping_quality`: Mapping quality threshold (default: 20)
@@ -182,7 +175,7 @@ output_directory/
 
 ### RMUS (Read Mapping Uniformity Score)
 
-RMUS is a metric that assesses the uniformity of read distribution across mitochondrial genomes. Higher RMUS values indicate more uniform coverage, which can help distinguish authentic mitochondrial content from contamination or low-quality alignments.
+RMUS is a novel metric based on [Shannon's entropy](https://arxiv.org/pdf/1405.2061) that assesses the uniformity of read distribution across genomes. Higher RMUS values indicate more uniform coverage, which can help distinguish authentic mitochondrial content from mapping artifacts, contamination or overall low-quality alignments.
 
 RMUS is calculated as follows:
 
@@ -204,7 +197,7 @@ H = -\sum_{i=1}^{n} p_i \log_2(p_i)
 - \( H_{max} \) is the maximum possible entropy for the given number of categories  
 - If \( H_{max} \) is zero, RMUS is set to zero to avoid division by zero errors.
 
-RMUS values range from 0 to 1, where 1 indicates perfect uniformity across all categories. This metric is particularly useful for assessing if the mapping of reads is an artifact, as it provides a quantitative measure of how evenly reads are distributed across different taxonomic groups. We assume that only a high RMUS value indicates that the original reads are likely fro m a mitochondrial genome, while low RMUS values may suggest mapping artifacts or numts. It helps in identifying potential contamination or uneven coverage that may affect downstream analyses. RMUS is calculated for each taxonomic category, allowing for detailed insights into the distribution of reads across different mitochondrial genomes. It is calculated during the taxonomic assignment step and is included in the output summary file for easy interpretation.
+RMUS values range from 0 to 1, where 1 indicates perfect uniformity of reads across all categories (i.e. genomic bins). This metric is particularly useful for assessing if the mapping of reads is an artifact (mapping only to a single specific region), as it provides a quantitative measure of how evenly reads are distributed across the reference genomes. We assume that only a high RMUS value indicates that the original reads are likely from a specific mitochondrial genome, while low RMUS values may suggest mapping artifacts or numts. It helps in identifying potential contamination or uneven coverage that may affect downstream analyses. RMUS is calculated for each taxonomic category during the taxonomic assignment step and is included in the output summary file for easy interpretation.
 
 ### Bin Size
 
@@ -216,7 +209,7 @@ The mapping quality threshold filters alignments based on their reliability. Hig
 
 ### Taxonomic Hierarchy
 
-Determines the taxonomic level for classification (e.g., species, genus, family). Lower levels provide more specific identification but may have reduced sensitivity.
+Determines the taxonomic level for classification (e.g., species, genus, family, order, phylum or kingdom). Lower levels provide more specific identification but may have reduced sensitivity.
 
 ## Troubleshooting
 
@@ -252,7 +245,7 @@ If you use ECMSD in your research, please cite:
 
 ## License
 
-[License information to be added]
+MIT License (MIT)
 
 ## Author
 
@@ -260,7 +253,7 @@ Martin Kapun
 
 ## Contact
 
-For questions, issues, or feature requests, please contact [contact information].
+For questions, issues, or feature requests, please write an issue.
 
 ## Version History
 
