@@ -201,7 +201,7 @@ run_mapping() {
         -x sr \
         --secondary=no \
         -t "${threads}" "${REF}" ${reads} \
-        2>"${Output}/logs/logfile.log" |
+        2>>"${Output}/logs/logfile.log" |
         awk -v Q="${quality}" '$12 >= Q {print}'
 }
 
