@@ -18,6 +18,9 @@ sleep 2
 ## activate the conda environment
 eval "$(conda shell.bash hook)"
 
+## create the conda environment directory
+mkdir -p ${WD}/scripts/conda_env
+
 ## create a conda environment for the scripts
 conda create \
     -p ${WD}/scripts/conda_env \
