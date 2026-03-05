@@ -8,16 +8,30 @@ suppressPackageStartupMessages({
 
 # Parse arguments
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 2) {
-  stop("Usage: Rscript plot_mito_summary.R <Output_Dir> <TaxonColumn>")
+if (length(args) < 3) {
+  stop("Usage: Rscript plot_mito_summary.R <MitoSummaryPath> <OutputDir> <TaxonColumn> [<Prefix>]")
 }
 
-Output <- args[1]
-Taxon <- args[2]
+MitoSummaryPath <- args[1]
+Output <- args[2]
+Taxon <- args[3]
+Prefix <- ifelse(length(args) >= 4, paste0(args[4], "_"), "")
+
+# Create output directory if it doesn't exist
+if (!dir.exists(file.path(Output, "mapping"))) {
+  dir.create(file.path(Output, "mapping"), recursive = TRUE)
+}
+
+#Check if MitoSummaryPath exists
+if (!file.exists(MitoSummaryPath)) {
+  stop(paste("Error: Mito summary file", MitoSummaryPath, "does not exist."))
+}
 
 # Read summary data
-summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
-data <- read.table(summary_file, header = TRUE, sep = "\t")
+#summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
+data <- read.table(MitoSummaryPath, header = TRUE, sep = "\t")
+
+print(paste("Processing Mito summary data from:", MitoSummaryPath))
 
 # Summarize read counts by taxon and length
 data_sub <- data %>%
@@ -29,9 +43,11 @@ data_sub <- data %>%
 # Save summarized table
 write.table(
   data_sub,
-  file = file.path(Output, "mapping", paste0("Mito_summary_", Taxon, ".txt")),
+  file = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, ".txt")),
   sep = "\t", row.names = FALSE, quote = FALSE
 )
+
+print("Identifying top 10 taxa by total reads...")
 
 # Identify top 10 taxa by total reads
 top_taxa_names <- data_sub %>%
@@ -45,6 +61,10 @@ top_taxa <- data_sub %>%
   filter((!!sym(Taxon)) %in% top_taxa_names) %>%
   mutate(!!Taxon := factor(!!sym(Taxon), levels = top_taxa_names))
 
+if (length(top_taxa_names) == 0 || nrow(top_taxa) == 0) {
+  stop("No taxa found — check input data or filtering conditions.")
+}
+
 # Plot histogram of read lengths for top 10 taxa make sure that the barwidth is always 1
 p1 <- ggplot(top_taxa, aes(x = Length, y = TotalReads, color = !!sym(Taxon))) +
   geom_col(width = 1) +
@@ -54,9 +74,11 @@ p1 <- ggplot(top_taxa, aes(x = Length, y = TotalReads, color = !!sym(Taxon))) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggsave(
-  filename = file.path(Output, "mapping", paste0("Mito_summary_", Taxon, "_ReadLengths.png")),
+  filename = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_ReadLengths.png")),
   plot = p1, width = 10, height = 6, dpi = 300
 )
+
+print("Calculating proportions per taxon...")
 
 # Calculate proportions per taxon
 data_sub2 <- data_sub %>%
@@ -69,7 +91,7 @@ data_sub2 <- data_sub %>%
 # Save proportions table
 write.table(
   data_sub2,
-  file = file.path(Output, "mapping", paste0("Mito_summary_", Taxon, "_proportions.txt")),
+  file = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_proportions.txt")),
   sep = "\t", row.names = FALSE, quote = FALSE
 )
 
@@ -81,6 +103,8 @@ p2 <- ggplot(data_sub2, aes(x = !!sym(Taxon), y = Proportion)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggsave(
-  filename = file.path(Output, "mapping", paste0("Mito_summary_", Taxon, "_Proportions.png")),
+  filename = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_Proportions.png")),
   plot = p2, width = 10, height = 6, dpi = 150
 )
+
+print("Plots saved. Processing complete.")

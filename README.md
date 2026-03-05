@@ -74,7 +74,7 @@ bash shell/ECMSD.sh \
     --fwd TestData/merged.fastq.gz \
     --out TestOutput \
     --threads 20 \
-    --Binsize 1000 \
+    --binsize 1000 \
     --RMUS-threshold 0.15 \
     --mapping_quality 20 \
     --taxonomic-hierarchy genus \
@@ -127,7 +127,7 @@ A successful test run indicates that:
 
 - `-r, --rev`: Path to the reverse FASTQ file (for paired-end data)
 - `-m, --merged`: Path to merged FASTQ file that should be mapped in addition to the forward and reverse reads
-- `-b, --Binsize`: Bin size for RMUS analysis (default: 1000)
+- `-b, --binsize`: Bin size for RMUS analysis (default: 1000)
 - `-u, --RMUS-threshold`: RMUS threshold for analysis (default: 0.15)
 - `-q, --mapping_quality`: Mapping quality threshold (default: 20)
 - `-t, --threads`: Number of threads to use (default: 10)
@@ -135,6 +135,9 @@ A successful test run indicates that:
 - `-x, --taxonomic-hierarchy`: Taxonomic hierarchy level (default: species)
 - `-v, --version`: Show version and exit
 - `-h, --help`: Show help message and exit
+- `-p, --prefix`: Prefix for output files (default: None)
+- `-s, --skip_environment`: Skip conda environment setup (default: false)
+
 
 ### Advanced Examples
 
