@@ -43,7 +43,7 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 - Conda package manager
 - Internet connection (for database download)
 
-### Software Dependencies (installed via `install.sh`)
+### Software Dependencies (installed automatically via Bioconda or `install.sh`)
 
 - minimap2
 - BBTools (bbmask)
@@ -54,14 +54,28 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 
 ## Installation
 
-### Step 1 — Clone the repository
+### Recommended — Install via Bioconda
 
 ```bash
-git clone <repository-url>
+conda create -n ecmsd_env -c bioconda -c conda-forge ecmsd
+conda activate ecmsd_env
+```
+
+This installs ECMSD and all dependencies in a single step.
+
+### Alternative — Manual installation via `install.sh`
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+**Step 1 — Clone the repository**
+
+```bash
+git clone https://github.com/capoony/ECMSD.git
 cd ECMSD
 ```
 
-### Step 2 — Create and activate a conda environment
+**Step 2 — Create and activate a conda environment**
 
 You can use the provided environment file:
 
@@ -77,7 +91,7 @@ conda create -n ecmsd_env
 conda activate ecmsd_env
 ```
 
-### Step 3 — Install dependencies and scripts
+**Step 3 — Install dependencies and scripts**
 
 With your conda environment active, run the installation script:
 
@@ -87,9 +101,11 @@ bash shell/install.sh
 
 This installs all required dependencies (minimap2, bbmap, R, Python packages, etc.) into the active conda environment and registers the `ECMSD` command.
 
-### Step 4 — Build the reference database
+</details>
 
-The reference database must be created before running any analysis. This is a one-time step:
+### Build the reference database
+
+Regardless of the installation method, the reference database must be created before running any analysis. This is a one-time step:
 
 ```bash
 ECMSD --create-db --db-folder /path/to/db_folder
