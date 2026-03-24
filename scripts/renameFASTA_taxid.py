@@ -1,4 +1,5 @@
 import sys
+import os
 from collections import defaultdict as d
 from optparse import OptionParser, OptionGroup
 
@@ -14,10 +15,6 @@ group = OptionGroup(parser, '< put description here >')
 parser.add_option("--input", dest="IN", help="Input file")
 parser.add_option("--Taxid", dest="TX", help="")
 parser.add_option("--output", dest="OUT", help="Output file")
-parser.add_option("--logical", dest="log",
-                  help="logical parameter", action="store_true")
-parser.add_option("--param", dest="param",
-                  help="numerical parameter", default=1)
 
 (options, args) = parser.parse_args()
 parser.add_option_group(group)
@@ -37,6 +34,20 @@ def load_data(x):
         y = open(x, "r", encoding="latin-1")
     return y
 
+
+# check if the required options are provided
+if not options.IN or not options.OUT or not options.TX:
+    parser.print_help()
+    sys.exit(1)
+
+# check if files exist
+
+if not os.path.isfile(options.IN):
+    print(f"Error: Input file {options.IN} does not exist.")
+    sys.exit(1)
+if not os.path.isfile(options.TX):
+    print(f"Error: Taxid file {options.TX} does not exist.")
+    sys.exit(1)
 
 # Create a dictionary to map names to taxids
 # The dictionary will be used to rename the FASTA headers
@@ -70,7 +81,7 @@ with load_data(options.IN) as f, open(options.OUT, "wt") as o:
             if name in TaxidDict and TaxidDict[name] not in IDlist:
                 # If the taxid is not in IDlist, add it to IDlist and write the new header
                 SKIP = False
-                IDlist[TaxidDict[name]]
+                IDlist[TaxidDict[name]] = True
                 o.write(f">kraken:taxid|{TaxidDict[name]}\n")
                 continue
             # If the name is not in TaxidDict or the taxid is already in IDlist, skip the line

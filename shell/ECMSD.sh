@@ -12,31 +12,38 @@ set -euo pipefail
 usage() {
     cat <<EOF
 Usage:
-    ECMSD.sh -f|--fwd FWD_FASTQ -o|--out OUTPUT_FOLDER [options]
+  ECMSD -m MERGED_FASTQ -o OUTPUT_FOLDER -d DB_FOLDER [options]
 
-REQUIRED ARGUMENTS:
-  -f | --fwd or -m | --merged  FASTQ_FILE  Path to the forward or merged FASTQ file
-  -o | --out OUTPUT_FOLDER  Path to the output folder
+REQUIRED ARGUMENTS FOR ANALYSIS (choose one):
+  -f | --fwd or -m | --merged  FASTQ_FILE   Path to the forward FASTQ file or merged FASTQ file
+  -o | --out OUTPUT_FOLDER                  Path to the output folder
+  -d | --db-folder DB_FOLDER                Folder for the database
 
-OPTIONAL ARGUMENTS:
-  -f | --fwd FWD_FASTQ                  Path to the forward FASTQ file (default: None)
-  -r | --rev REV_FASTQ                  Path to the reverse FASTQ file (default: None)
-  -m | --merged MERGED_FASTQ            Path to merged FASTQ file (default: None)
-  -b | --binsize BINSIZE                Bin size for analysis (default: BINSIZE = 1000)
-  -u | --RMUS-threshold THRESHHOLD      RMUS threshold for analysis (default: THRESHHOLD = 0.15)
-  -q | --mapping_quality QUALITY        Mapping quality threshold (default: QUALITY = 20)
-  -p | --prefix PREFIX                  Prefix for output files (default: None)
-  -s | --skip_environment               Skip conda environment setup (default: false)
-  -t | --threads THREADS                Number of threads to use (default: THREADS = 10)
-  -c | --force                          Force overwrite of existing output files (default: false)
-  -x | --taxonomic-hierarchy HIERARCHY  Taxonomic hierarchy (default: HIERARCHY = species)
-  -v | --version                        Show version and exit
-  -h | --help                           Show this help message and exit
+REQUIRED ARGUMENTS FOR BUILDING DATABASE:
+  -z | --create-db                          Create a new database
+  -d | --db-folder DB_FOLDER                Folder for the database
+
+ALL ARGUMENTS:
+  -h | --help                               Show this help message and exit
+  -v | --version                            Show version and exit
+  -f | --fwd FWD_FASTQ                      Path to the forward FASTQ file (default: None)
+  -r | --rev REV_FASTQ                      Path to the reverse FASTQ file (default: None)
+  -m | --merged MERGED_FASTQ                Path to merged FASTQ file (default: None)
+  -b | --binsize BINSIZE                    Bin size for analysis (default: BINSIZE = 1000)
+  -u | --RMUS-threshold THRESHHOLD          RMUS threshold for analysis (default: THRESHHOLD = 0.15)
+  -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
+  -p | --prefix PREFIX                      Prefix for output files (default: None)
+  -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
+  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy (default: HIERARCHY = species)
+  -c | --force                              Force overwrite of existing output files (default: false)
+  -z | --create-db                          Create a new database
+  -d | --db-folder DB_FOLDER                Folder for the database
 
 Example:
-  ECMSD.sh -f reads_R1.fastq -r reads_R2.fastq -o results/
+  ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/
+  ECMSD --create-db --db-folder /path/to/db_folder
+  ECMSD -f reads_R1.fastq -o results/ --db-folder /path/to/db_folder
 EOF
-    exit 1
 }
 
 ###############################################################################
@@ -50,13 +57,13 @@ rmus_threshold=0.15
 quality=20
 threads=10
 force=false
-version="1.0"
+version="1.1.0"
 taxonomic_hierarchy="species"
-skip_environment=false
+# skip_environment=false
 output=""
 prefix=""
-
-echo "Starting ECMSD pipeline..."
+db_folder=""
+create_db=false
 
 ###############################################################################
 #                             Argument Parsing                                #
@@ -103,10 +110,6 @@ while [[ $# -gt 0 ]]; do
         prefix="$2"
         shift 2
         ;;
-    -s | --skip_environment)
-        skip_environment=true
-        shift
-        ;;
     -o | --out)
         output="$2"
         shift 2
@@ -117,20 +120,105 @@ while [[ $# -gt 0 ]]; do
         ;;
     -h | --help)
         usage
+        exit 0
+        ;;
+    -z | --create-db)
+        create_db=true
+        shift
+        ;;
+    -d | --db-folder)
+        db_folder="$2"
+        shift 2
         ;;
     *)
         echo "Unknown option: $1"
         usage
+        exit 1
         ;;
     esac
 done
 
+echo "Starting ECMSD pipeline..."
+
+###############################################################################
+#                        Resolve Script Directory                            #
+###############################################################################
+# Detect if running from a conda install or directly from the repo
+# Once installed via conda, scripts live in $CONDA_PREFIX/lib/ecmsd/scripts/
+if [[ -d "$(dirname "$(realpath "$0")")/../lib/ecmsd/scripts" ]]; then
+    # Running from conda install
+    SCRIPT_DIR="$(dirname "$(realpath "$0")")/../lib/ecmsd/scripts"
+    SHELL_DIR="$(dirname "$(realpath "$0")")/../lib/ecmsd/shell"
+else
+    # Running directly from repo
+    SCRIPT_DIR="$(dirname "$(realpath "$0")")/../scripts"
+    SHELL_DIR="$(dirname "$(realpath "$0")")/../shell"
+fi
+
+# Convert db_folder to absolute path without requiring the directory to exist yet
+if [[ -n "${db_folder}" && "${db_folder}" != /* ]]; then
+    db_folder="$(pwd)/${db_folder}"
+fi
+
+###############################################################################
+#                        Handle Database Creation Early                      #
+###############################################################################
+if [[ "${create_db}" == true ]]; then
+    if [[ -z "${db_folder}" ]]; then
+        echo "Error: --db-folder must be specified with --create-db."
+        exit 1
+    fi
+
+    echo "Creating database in folder: ${db_folder}"
+    mkdir -p "${db_folder}"
+
+    bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+
+    echo "Database created successfully in ${db_folder}."
+    exit 0 
+fi
+
+###############################################################################
+#                        Check Database Folder                               #
+###############################################################################
+if [[ -n "${db_folder}" ]]; then
+    # Convert db_folder to an absolute path (works even if it doesn't yet exist)
+
+    echo "Using database folder: ${db_folder}"
+
+    if [[ ! -f "${db_folder}/NCBI_taxdump/nodes.dmp" || \
+          ! -f "${db_folder}/NCBI_taxdump/names.dmp" || \
+          ! -f "${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz" ]]; then
+        echo "Database files missing in ${db_folder}. Generating missing files..."
+        bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+    fi
+
+    REF="${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz"
+    NODES="${db_folder}/NCBI_taxdump/nodes.dmp"
+    NAMES="${db_folder}/NCBI_taxdump/names.dmp"
+else
+    echo "No database folder provided. Please provide a database folder using --db-folder or create a new database using --create-db."
+    usage
+    exit 1
+    # DEFAULT_DB="${WD}/data/refseq_mito"
+    # REF="${DEFAULT_DB}/mitochondrion_refseq_taxid_masked.fna.gz"
+    # NODES="${DEFAULT_DB}/NCBI_taxdump/nodes.dmp"
+    # NAMES="${DEFAULT_DB}/NCBI_taxdump/names.dmp"
+
+    # if [[ ! -f "${REF}" || ! -f "${NODES}" || ! -f "${NAMES}" ]]; then
+    #     echo "Default database files are missing. Generating database..."
+    #     mkdir -p "${DEFAULT_DB}"
+    #     bash "${SHELL_DIR}/MakeRef.sh" "${DEFAULT_DB}" "${threads}"
+    # fi
+fi
+
 ###############################################################################
 #                        Check Required Arguments                             #
 ###############################################################################
-if [[ -z "${fwd}" || -z "${output}" ]]; then
-    echo "Error: --fwd and --out are required."
+if [[ ( -z "${fwd}" && -z "${merged}" ) || -z "${output}" ]]; then
+    echo "Error: A read input (--fwd or --merged) and --out are required."
     usage
+    exit 1
 fi
 
 ###############################################################################
@@ -179,11 +267,6 @@ elif [[ -d "${Output}" ]]; then
 fi
 
 ###############################################################################
-#                        Find Base Directory                                  #
-###############################################################################
-WD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-###############################################################################
 #                        Clean Logs Directory                                 #
 ###############################################################################
 if [[ -d "${Output}/logs" ]]; then
@@ -198,57 +281,20 @@ mkdir -p "${Output}/mapping"
 mkdir "${Output}/logs"
 
 ###############################################################################
-#                        Dependency Setup                                     #
-###############################################################################
-echo "Checking dependencies and reference data..."
-if [[ "${skip_environment}" == false ]]; then
-    echo "Setting up conda environment..."
-    [[ ! -d "${WD}/scripts/conda_env" ]] && bash "${WD}/shell/requirements.sh" "${WD}" "${Output}"
-else
-    echo "Skipping conda environment setup as per user request."
-fi
-
-[[ ! -d "${WD}/data/refseq_mito" ]] && bash "${WD}/shell/MakeRef.sh" "${WD}" "${threads}"
-
-###############################################################################
-#                        Activate Conda Environment                           #
-###############################################################################
-if [[ ! -d "${WD}/scripts/conda_env" ]] && [[ "${skip_environment}" == false ]]; then
-    echo "Error: Conda environment not found."
-    exit 1
-fi
-
-if [[ "${skip_environment}" == false ]]; then
-    echo "Conda environment found at ${WD}/scripts/conda_env"
-
-    echo "Activating conda environment..."
-    eval "$(conda shell.bash hook)" || {
-        echo "Conda shell hook could not be initialized"
-        exit 1
-    }
-    conda activate "${WD}/scripts/conda_env" || {
-        echo "Conda environment could not be activated"
-        exit 1
-    }
-else
-    echo "Skipping conda environment activation as per user request."
-fi
-
-###############################################################################
 #                        Mapping Function                                     #
 ###############################################################################
 run_mapping() {
     # Function to run minimap2 mapping and log the progress in a log file
-    local reads="$1"
-    echo "Running minimap2 mapping for: ${reads}"
+    # Accepts one or more read file paths as arguments
+    echo "Running minimap2 mapping for: $*"
     minimap2 \
         -x sr \
         --secondary=no \
-        -t "${threads}" "${REF}" ${reads} \
+        -t "${threads}" "${REF}" "$@" \
         2> "${Output}/logs/minimap2.log" |
         awk -v Q="${quality}" '$12 >= Q {print}'
 
-    #prtint log file content
+    # print log file content
     echo "Minimap2 log:"
     cat "${Output}/logs/minimap2.log"
 }
@@ -264,8 +310,6 @@ if [[ -n "${prefix}" ]]; then
     PAF="${Output}/mapping/${prefix}_Mito.paf"
 fi
 
-REF="${WD}/data/refseq_mito/mitochondrion_refseq_taxid_masked.fna.gz"
-
 # check if fwd is provided
 if [[ -n "${fwd}" ]]; then
     if [[ -z "${rev}" || "${rev}" == "no" ]]; then
@@ -273,7 +317,7 @@ if [[ -n "${fwd}" ]]; then
         run_mapping "${fwd}" | gzip >"${PAF}.gz"
     else
         echo "Running paired-end mapping..."
-        run_mapping "${fwd} ${rev}" | gzip >"${PAF}.gz"
+        run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
     fi
 fi
 
@@ -307,9 +351,12 @@ if [[ -n "${prefix}" ]]; then
     output_base="${Output}/mapping/${prefix}_Mito_summary"
 fi
 
-python "${WD}/scripts/LinkTaxonomy.py" \
-    --Nodes "${WD}/data/refseq_mito/NCBI_taxdump/nodes.dmp" \
-    --Names "${WD}/data/refseq_mito/NCBI_taxdump/names.dmp" \
+###############################################################################
+#                        Update Script References                             #
+###############################################################################
+python "${SCRIPT_DIR}/LinkTaxonomy.py" \
+    --Nodes "${NODES}" \
+    --Names "${NAMES}" \
     --PAF "${PAF}.gz" \
     --Bins "${binsize}" \
     --RMUS "${rmus_threshold}" \
@@ -333,9 +380,10 @@ if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
 fi
 
 echo "Plotting results..."
-Rscript "${WD}/scripts/process_files.R" ${summary_file} ${Output} ${taxonomic_hierarchy} ${prefix}
+Rscript "${SCRIPT_DIR}/process_files.R" "${summary_file}" "${Output}" "${taxonomic_hierarchy}" "${prefix}"
 
 ###############################################################################
 #                        Pipeline Completed                                   #
 ###############################################################################
 echo "ECMSD pipeline completed successfully."
+    

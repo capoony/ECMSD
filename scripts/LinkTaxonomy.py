@@ -130,6 +130,11 @@ def calculate_rmus_from_paf(paf_file, bin_size, OUT):
 
 def main():
 
+    #check if all required options are provided
+    if not options.Tax or not options.Names or not options.PAF or not options.OUT:
+        parser.print_help()
+        sys.exit(1) 
+
     print("Loading taxonomy data from nodes.dmp and names.dmp ...")
     with load_data(options.Tax) as node:
 
