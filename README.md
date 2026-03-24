@@ -347,7 +347,7 @@ For questions, issues, or feature requests, please open a GitHub issue.
 
 ## Version History
 
-- **v1.1.0**: Decoupled database creation from analysis runs. The database is now built once with `--create-db --db-folder` and provided as a required parameter to all analysis runs. This prevents race conditions in parallel workflows and enables pipeline-level database management (e.g. pastForward Snakemake pipeline). Added `install.sh` for explicit dependency installation.
+- **v1.1.0**: Decoupled database creation from analysis runs. The database is now built once with `--create-db --db-folder` and provided as a required parameter to all analysis runs. This prevents race conditions in parallel workflows and enables pipeline-level database management (e.g. [pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)). Added `install.sh` for explicit dependency installation.
 - **v1.0.0**: Initial release with core mitochondrial detection functionality
 
 ## Acknowledgments
