@@ -118,6 +118,9 @@ def main():
             if "scientific name" in line:
                 names[its[0]] = its[1]
 
+# Load taxonomy first (populates parents, rank_dict, names module-level dicts)
+main()
+
 passing_taxids = load_coverage(options.Coverage, float(options.CovThreshold))
 print(
     f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
@@ -126,46 +129,17 @@ print(
 def get_alignment_score(fields):
     """Return the best available alignment score from PAF optional fields.
     Primary alignments carry ms:i (mate score / alignment score).
-    Secondary alignments carry s1:i (chaining score) instead.
-    Falls back to 0 if neither tag is present."""
+    Falls back to 0 if the tag is absent."""
     for f in fields[12:]:
         if f.startswith("ms:i:"):
-            return int(f[5:])
-        if f.startswith("s1:i:"):
             return int(f[5:])
     return 0
 
 
 def load_best_hits(paf_path, min_mapq):
-    """Two-pass winner-takes-all disambiguation.
-
-    For every read, collect all alignments (primary + secondary) that pass
-    basic quality filters, then keep only the alignment(s) that map to the
-    single best-scoring reference.  This prevents reads from a species A
-    contributing coverage to a closely-related species B via secondary hits.
-
-    Returns a dict: read_name -> list of raw PAF line strings (winners only).
+    """Single-pass: keep every primary alignment that passes MQ.
+    Returns a dict: read_name -> list of PAF fields for that read.
     """
-    # First pass: determine the best score per read
-    best_score = {}          # read_name -> highest alignment score seen
-    best_ref = {}            # read_name -> ref_name of that best alignment
-
-    with load_data(paf_path) as fh:
-        for line in fh:
-            fields = line.rstrip().split("\t")
-            if len(fields) < 12:
-                continue
-            read_name = fields[0]
-            mapq = int(fields[11])
-            is_secondary = any(f == "tp:A:S" for f in fields[12:])
-            if not is_secondary and mapq < min_mapq:
-                continue
-            score = get_alignment_score(fields)
-            if score > best_score.get(read_name, -1):
-                best_score[read_name] = score
-                best_ref[read_name] = fields[5]
-
-    # Second pass: keep only alignments to the winner reference
     winners = d(list)
     with load_data(paf_path) as fh:
         for line in fh:
@@ -173,23 +147,16 @@ def load_best_hits(paf_path, min_mapq):
             if len(fields) < 12:
                 continue
             read_name = fields[0]
-            ref_name = fields[5]
             mapq = int(fields[11])
-            is_secondary = any(f == "tp:A:S" for f in fields[12:])
-            if not is_secondary and mapq < min_mapq:
+            if mapq < min_mapq:
                 continue
-            if best_ref.get(read_name) == ref_name:
-                winners[read_name].append(fields)
+            winners[read_name].append(fields)
 
-    n_disambiguated = sum(
-        1 for rd, hits in winners.items() if len(hits) > 1
-    )
-    print(f"Winner-takes-all disambiguation: {len(winners)} reads retained, "
-          f"{n_disambiguated} reads had multiple refs collapsed to best hit.")
+    print(f"PAF loaded: {len(winners)} reads passed MQ filter.")
     return winners
 
 
-print("Loading PAF and disambiguating secondary alignments (winner-takes-all)...")
+print("Loading PAF alignments...")
 best_hits = load_best_hits(options.PAF, options.MapQuality)
 
 # Count reads per reference (ref_name, taxId) for ranking
@@ -203,7 +170,7 @@ with open(options.OUT+".txt", 'wt') as export:
     export.write(
         "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\n")
     for seqId, hit_list in best_hits.items():
-        # Each read now maps to exactly one reference; take the first (and only) entry
+        # Each read maps to one reference; take the first entry
         lines = hit_list[0]
         ref_name = lines[5]
         taxId = ref_name.split("|")[1]
@@ -211,22 +178,22 @@ with open(options.OUT+".txt", 'wt') as export:
         if taxId not in passing_taxids:
             continue
 
-            if tax_id not in names:
-                continue
+        if taxId not in names:
+            continue
 
-            node_path, name_path = taxon_trace(tax_id)
-            # loop through the following ranks "no rank|cellular root|domain|kingdom|phylum|class|order|family|genus|species" and make new list from name path. replace with NA if not available
-            rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
-            name_path = []
-            for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
-                if rank in rank_name:
-                    name_path.append(rank_name[rank])
-                else:
-                    name_path.append("NA")
+        node_path, name_path = taxon_trace(taxId)
+        # Build ordered list for the 8 standard ranks; fill NA where absent
+        rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
+        name_path = []
+        for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
+            if rank in rank_name:
+                name_path.append(rank_name[rank])
+            else:
+                name_path.append("NA")
 
-            Tax = "\t".join(["_".join(x.split()) for x in name_path])
-            export.write(sequence_id+"\t"+tax_id+"\t" +
-                        lines[1]+"\t"+lines[11] + "\t"+Tax+"\n")
+        Tax = "\t".join(["_".join(x.split()) for x in name_path])
+        export.write(seqId + "\t" + taxId + "\t" +
+                     lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
 
         # Track read counts per ref_name for ranking
         ref_read_counts[ref_name] += 1
@@ -237,14 +204,12 @@ with open(options.OUT+".txt", 'wt') as export:
         chosen_rank = options.TaxonomicHierarchy.lower()
         idx = rank_index.get(chosen_rank, 7)  # default to species
         label = name_path[idx] if name_path[idx] != "NA" else "Unknown"
-        # For ranks above species the NCBI name is already a single word;
-        # for species it is a full binomial ("Genus epithet") — use it as-is.
         ref_to_name[ref_name] = "_".join(label.split())
         # Always store the species binomial independently (used in plot titles)
         species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
         ref_to_species[ref_name] = "_".join(species_label.split())
 
-# Write ranked reference summary for pafr plotting
+# Write ranked reference summary for plotting
 with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
     ref_out.write("ref_name\ttaxid\ttaxon_name\tspecies_name\tread_count\n")
     for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
@@ -252,9 +217,3 @@ with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
             f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{count}\n")
 
 print(f"Reference summary written to: {options.OUT}.ref_summary.txt")
-
-
-    sys.exit()
-
-if __name__ == "__main__":
-    main()

@@ -22,16 +22,12 @@ OPTIONAL ARGUMENTS:
   -r | --rev         Path to the reverse FASTQ file (default: no)
   -m | --merged      Path to merged FASTQ file (default: no)
   -u | --cov-threshold   Minimum percentage of reference covered by reads (0-100) for a reference to be retained (default: 50)
-  -s | --score-ratio     Minimum alignment score ratio of secondary to primary alignment (0-1);
-                         controls which similar references receive reads (default: 0.9)
-  -a | --min-score       Minimum chaining score (s1 tag) for secondary alignments (default: 20)
-  -N | --max-secondary   Maximum number of secondary alignments per read retained by minimap2 (default: 5)
   -n | --top-n           Number of top references to generate alignment plots for (default: 25)
   -q | --mapping_quality Mapping quality threshold (default: 20)
   -t | --threads     Number of threads to use (default: 10)
   -c | --force       Force overwrite of existing output files
   -k | --skip-mapping  Skip mapping step and reuse existing PAF file (implies --force)
-  -x | --taxonomic-hierarchy Taxonomic hierarchy (default: species)
+  -x | --taxonomic-hierarchy Taxonomic hierarchy for classification; one of: species, genus, family, order, phylum, kingdom (default: species)
   -v | --version     Show version and exit
   -h | --help        Show this help message and exit
 
@@ -48,9 +44,6 @@ fwd=""
 rev=""
 merged=""
 cov_threshold=50
-score_ratio=0.9
-min_score=20
-max_secondary=5
 top_n=100
 quality=20
 threads=10
@@ -79,18 +72,6 @@ while [[ $# -gt 0 ]]; do
         ;;
     -u | --cov-threshold)
         cov_threshold="$2"
-        shift 2
-        ;;
-    -s | --score-ratio)
-        score_ratio="$2"
-        shift 2
-        ;;
-    -a | --min-score)
-        min_score="$2"
-        shift 2
-        ;;
-    -N | --max-secondary)
-        max_secondary="$2"
         shift 2
         ;;
     -n | --top-n)
@@ -218,30 +199,15 @@ conda activate "${WD}/scripts/conda_env" || {
 #                        Mapping Function                                     #
 ###############################################################################
 run_mapping() {
-    # Function to run minimap2 mapping and log the progress in a log file
+    # Function to run minimap2 mapping (primary alignments only) and log the progress
     local reads="$1"
     echo "Running minimap2 mapping for: ${reads}"
     minimap2 \
         -x sr \
-        --secondary=yes \
-        -p "${score_ratio}" \
-        -N "${max_secondary}" \
+        --secondary=no \
         -t "${threads}" "${REF}" ${reads} \
         2>>"${Output}/logs/logfile.log" |
-        awk -v Q="${quality}" -v MS="${min_score}" '
-        {
-            # Determine if primary (tp:A:P) or secondary (tp:A:S)
-            is_secondary = ($0 ~ /tp:A:S/)
-            if (!is_secondary && $12 >= Q) { print; next }
-            if (is_secondary) {
-                # Secondary alignments carry s1:i (chaining score) instead of ms:i
-                s1 = 0
-                for (i = 13; i <= NF; i++) {
-                    if ($i ~ /^s1:i:/) { s1 = substr($i, 6) + 0; break }
-                }
-                if (s1 >= MS) { print }
-            }
-        }'
+        awk -v Q="${quality}" '$12 >= Q {print}'
 }
 
 ###############################################################################
@@ -327,10 +293,8 @@ with opener(paf_file, "rt") as fh:
         mapq      = int(parts[11])
         ref_lengths[ref_name] = ref_len
 
-        # For primary alignments (tp:A:P) enforce MQ threshold;
-        # secondary alignments (tp:A:S) naturally have MQ=0 so skip the check.
-        is_secondary = any(f == "tp:A:S" for f in parts[12:])
-        if not is_secondary and mapq < min_mapq:
+        # Enforce MQ threshold on all (primary-only) alignments
+        if mapq < min_mapq:
             continue
 
         # Skip if this read has already been counted on this reference
