@@ -1,7 +1,6 @@
-#!/usr/bin/env Rscript
-
 # Load required libraries
 suppressPackageStartupMessages({
+  library(data.table)
   library(tidyverse)
   library(rlang)
 })
@@ -12,26 +11,19 @@ if (length(args) < 3) {
   stop("Usage: Rscript plot_mito_summary.R <MitoSummaryPath> <OutputDir> <TaxonColumn> [<Prefix>]")
 }
 
-MitoSummaryPath <- args[1]
-Output <- args[2]
-Taxon <- args[3]
-Prefix <- ifelse(length(args) >= 4, paste0(args[4], "_"), "")
+Output <- args[1]
+Taxon <- args[2]
+print(Output)
 
-# Create output directory if it doesn't exist
-if (!dir.exists(file.path(Output, "mapping"))) {
-  dir.create(file.path(Output, "mapping"), recursive = TRUE)
-}
+# Read summary data (use fread for fast I/O on large files)
+summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
+data <- as.data.frame(data.table::fread(summary_file, sep = "\t", header = TRUE))
 
-#Check if MitoSummaryPath exists
-if (!file.exists(MitoSummaryPath)) {
-  stop(paste("Error: Mito summary file", MitoSummaryPath, "does not exist."))
-}
-
-# Read summary data
-#summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
-data <- read.table(MitoSummaryPath, header = TRUE, sep = "\t")
-
-print(paste("Processing Mito summary data from:", MitoSummaryPath))
+# Keep only primary alignments (MappingQuality > 0; secondaries always have MQ=0
+# in minimap2) and deduplicate so each read is counted exactly once.
+data <- data %>%
+  filter(MappingQuality > 0) %>%
+  distinct(SeqID, .keep_all = TRUE)
 
 # Summarize read counts by taxon and length
 data_sub <- data %>%

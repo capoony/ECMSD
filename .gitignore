@@ -3,4 +3,5 @@ TestOutput/
 #shell/kraken2.sh
 #shell/trim.sh
 scripts/conda_env
+shell/ECMSD_old.sh
 .DS_Store
