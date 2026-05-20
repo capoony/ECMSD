@@ -12,29 +12,39 @@ set -euo pipefail
 usage() {
     cat <<EOF
 Usage:
-    ECMSD.sh -f|--fwd FWD_FASTQ -o|--out OUTPUT_FOLDER [options]
+  ECMSD -m MERGED_FASTQ -o OUTPUT_FOLDER -d DB_FOLDER [options]
 
-REQUIRED ARGUMENTS:
-  -f | --fwd         Path to the forward FASTQ file
-  -o | --out         Path to the output folder
+REQUIRED ARGUMENTS FOR ANALYSIS (choose one):
+  -f | --fwd or -m | --merged  FASTQ_FILE   Path to the forward FASTQ file or merged FASTQ file
+  -o | --out OUTPUT_FOLDER                  Path to the output folder
+  -d | --db-folder DB_FOLDER                Folder for the database
 
-OPTIONAL ARGUMENTS:
-  -r | --rev         Path to the reverse FASTQ file (default: no)
-  -m | --merged      Path to merged FASTQ file (default: no)
-  -u | --cov-threshold   Minimum percentage of reference covered by reads (0-100) for a reference to be retained (default: 50)
-  -n | --top-n           Number of top references to generate alignment plots for (default: 25)
-  -q | --mapping_quality Mapping quality threshold (default: 20)
-  -t | --threads     Number of threads to use (default: 10)
-  -c | --force       Force overwrite of existing output files
-  -k | --skip-mapping  Skip mapping step and reuse existing PAF file (implies --force)
-  -x | --taxonomic-hierarchy Taxonomic hierarchy for classification; one of: species, genus, family, order, phylum, kingdom (default: species)
-  -v | --version     Show version and exit
-  -h | --help        Show this help message and exit
+REQUIRED ARGUMENTS FOR BUILDING DATABASE:
+  -z | --create-db                          Create a new database
+  -d | --db-folder DB_FOLDER                Folder for the database
+
+ALL ARGUMENTS:
+  -h | --help                               Show this help message and exit
+  -v | --version                            Show version and exit
+  -f | --fwd FWD_FASTQ                      Path to the forward FASTQ file (default: None)
+  -r | --rev REV_FASTQ                      Path to the reverse FASTQ file (default: None)
+  -m | --merged MERGED_FASTQ                Path to merged FASTQ file (default: None)
+  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 50)
+  -n | --top-n N                            Number of top references to generate alignment plots for (default: 25)
+  -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
+  -p | --prefix PREFIX                      Prefix for output files (default: None)
+  -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
+  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy (default: HIERARCHY = species)
+  -c | --force                              Force overwrite of existing output files (default: false)
+  -k | --skip-mapping                       Skip mapping and coverage steps; reuse existing PAF and coverage files (implies --force)
+  -z | --create-db                          Create a new database
+  -d | --db-folder DB_FOLDER                Folder for the database
 
 Example:
-  ECMSD.sh -f reads_R1.fastq -r reads_R2.fastq -o results/
+  ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db
+  ECMSD --create-db --db-folder /path/to/db_folder
+  ECMSD -f reads_R1.fastq -o results/ --db-folder /path/to/db_folder
 EOF
-    exit 1
 }
 
 ###############################################################################
@@ -44,14 +54,17 @@ fwd=""
 rev=""
 merged=""
 cov_threshold=50
-top_n=100
+top_n=25
 quality=20
 threads=10
 force="no"
 skip_mapping="no"
-version="1.0"
+version="1.2.0"
 taxonomic_hierarchy="species"
 output=""
+prefix=""
+db_folder=""
+create_db=false
 
 ###############################################################################
 #                             Argument Parsing                                #
@@ -92,11 +105,15 @@ while [[ $# -gt 0 ]]; do
         ;;
     -k | --skip-mapping)
         skip_mapping="yes"
-        force="yes"   # must be yes so the existing-dir check doesn't abort
+        force="yes"
         shift
         ;;
     -x | --taxonomic-hierarchy | --taxonomic_hierarchy)
         taxonomic_hierarchy="$2"
+        shift 2
+        ;;
+    -p | --prefix)
+        prefix="$2"
         shift 2
         ;;
     -o | --out)
@@ -109,26 +126,99 @@ while [[ $# -gt 0 ]]; do
         ;;
     -h | --help)
         usage
+        exit 0
+        ;;
+    -z | --create-db)
+        create_db=true
+        shift
+        ;;
+    -d | --db-folder)
+        db_folder="$2"
+        shift 2
         ;;
     *)
         echo "Unknown option: $1"
         usage
+        exit 1
         ;;
     esac
 done
 
+echo "Starting ECMSD pipeline..."
+
+###############################################################################
+#                        Resolve Script Directory                            #
+###############################################################################
+# Detect if running from a conda install or directly from the repo
+# Once installed via conda, scripts live in $CONDA_PREFIX/lib/ecmsd/scripts/
+if [[ -d "$(dirname "$(realpath "$0")")/../lib/ecmsd/scripts" ]]; then
+    # Running from conda install
+    SCRIPT_DIR="$(dirname "$(realpath "$0")")/../lib/ecmsd/scripts"
+    SHELL_DIR="$(dirname "$(realpath "$0")")/../lib/ecmsd/shell"
+else
+    # Running directly from repo
+    SCRIPT_DIR="$(dirname "$(realpath "$0")")/../scripts"
+    SHELL_DIR="$(dirname "$(realpath "$0")")/../shell"
+fi
+
+# Convert db_folder to absolute path without requiring the directory to exist yet
+if [[ -n "${db_folder}" && "${db_folder}" != /* ]]; then
+    db_folder="$(pwd)/${db_folder}"
+fi
+
+###############################################################################
+#                        Handle Database Creation Early                      #
+###############################################################################
+if [[ "${create_db}" == true ]]; then
+    if [[ -z "${db_folder}" ]]; then
+        echo "Error: --db-folder must be specified with --create-db."
+        exit 1
+    fi
+
+    echo "Creating database in folder: ${db_folder}"
+    mkdir -p "${db_folder}"
+
+    bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+
+    echo "Database created successfully in ${db_folder}."
+    exit 0
+fi
+
+###############################################################################
+#                        Check Database Folder                               #
+###############################################################################
+if [[ -n "${db_folder}" ]]; then
+    echo "Using database folder: ${db_folder}"
+
+    if [[ ! -f "${db_folder}/NCBI_taxdump/nodes.dmp" || \
+          ! -f "${db_folder}/NCBI_taxdump/names.dmp" || \
+          ! -f "${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz" ]]; then
+        echo "Database files missing in ${db_folder}. Generating missing files..."
+        bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+    fi
+
+    REF="${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz"
+    NODES="${db_folder}/NCBI_taxdump/nodes.dmp"
+    NAMES="${db_folder}/NCBI_taxdump/names.dmp"
+else
+    echo "No database folder provided. Please provide a database folder using --db-folder or create a new database using --create-db."
+    usage
+    exit 1
+fi
+
 ###############################################################################
 #                        Check Required Arguments                             #
 ###############################################################################
-if [[ -z "${fwd}" || -z "${output}" ]]; then
-    echo "Error: --fwd and --out are required."
+if [[ ( -z "${fwd}" && -z "${merged}" ) || -z "${output}" ]]; then
+    echo "Error: A read input (--fwd or --merged) and --out are required."
     usage
+    exit 1
 fi
 
 ###############################################################################
 #                            Check Input Files                                #
 ###############################################################################
-[[ ! -f "${fwd}" ]] && {
+[[ -n "${fwd}" && ! -f "${fwd}" ]] && {
     echo "Error: Forward FASTQ file '${fwd}' does not exist."
     exit 1
 }
@@ -140,6 +230,18 @@ fi
     echo "Error: Merged FASTQ file '${merged}' does not exist."
     exit 1
 }
+
+# if rev is provided, also fwd is required
+if [[ -n "${rev}" && -z "${fwd}" ]]; then
+    echo "Error: Forward FASTQ file must be provided if reverse FASTQ file is specified."
+    exit 1
+fi
+
+# if merged is provided, fwd and rev should be skipped
+if [[ -n "${merged}" && ( -n "${fwd}" || -n "${rev}" ) ]]; then
+    echo "Error: Merged FASTQ file cannot be provided with forward or reverse FASTQ files."
+    exit 1
+fi
 
 ###############################################################################
 #                        Prepare Output Directory                             #
@@ -154,67 +256,53 @@ if [[ "${skip_mapping}" == "yes" && -d "${Output}" ]]; then
     echo "Skipping mapping — reusing existing PAF in: ${Output}/mapping"
     rm -rf "${Output}/logs"
 elif [[ "${force}" == "yes" && -d "${Output}" ]]; then
-    echo "Clearing mapping and log directories in: ${Output}"
-    rm -rf "${Output}/mapping" "${Output}/logs"
+    echo "Removing existing output directory: ${Output}"
+    rm -rf "${Output}"
 elif [[ -d "${Output}" ]]; then
     echo "Output directory '${Output}' already exists. Use -c or --force to overwrite."
     exit 1
 fi
 
 ###############################################################################
-#                        Find Base Directory                                  #
+#                        Clean Logs Directory                                 #
 ###############################################################################
-WD="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -d "${Output}/logs" ]]; then
+    rm -rf "${Output}/logs"
+fi
 
 ###############################################################################
 #                        Create Output Directories                            #
 ###############################################################################
 echo "Creating output directories..."
 mkdir -p "${Output}/mapping"
-mkdir "${Output}/logs"
-
-###############################################################################
-#                        Dependency Setup                                     #
-###############################################################################
-echo "Checking dependencies and reference data..."
-if [[ ! -d "${WD}/scripts/conda_env" ]]; then 
-    bash "${WD}/shell/requirements.sh" "${WD}" "${Output}"
-fi
-[[ ! -d "${WD}/data/refseq_mito" ]] && bash "${WD}/shell/MakeRef.sh" "${WD}" "${threads}"
-
-###############################################################################
-#                        Activate Conda Environment                           #
-###############################################################################
-echo "Activating conda environment..."
-eval "$(conda shell.bash hook)" || {
-    echo "Conda shell hook could not be initialized"
-    exit 1
-}
-conda activate "${WD}/scripts/conda_env" || {
-    echo "Conda environment could not be activated"
-    exit 1
-}
+mkdir -p "${Output}/logs"
 
 ###############################################################################
 #                        Mapping Function                                     #
 ###############################################################################
 run_mapping() {
-    # Function to run minimap2 mapping (primary alignments only) and log the progress
-    local reads="$1"
-    echo "Running minimap2 mapping for: ${reads}"
+    # Accepts one or more read file paths as arguments
+    echo "Running minimap2 mapping for: $*"
     minimap2 \
         -x sr \
         --secondary=no \
-        -t "${threads}" "${REF}" ${reads} \
-        2>>"${Output}/logs/logfile.log" |
+        -t "${threads}" "${REF}" "$@" \
+        2> "${Output}/logs/minimap2.log" |
         awk -v Q="${quality}" '$12 >= Q {print}'
+
+    echo "Minimap2 log:"
+    cat "${Output}/logs/minimap2.log"
 }
 
 ###############################################################################
 #                        Mapping Step                                         #
 ###############################################################################
+echo "Starting mapping step..."
+
 PAF="${Output}/mapping/Mito.paf"
-REF="${WD}/data/refseq_mito/mitochondrion_refseq_taxid_masked.fna.gz"
+if [[ -n "${prefix}" ]]; then
+    PAF="${Output}/mapping/${prefix}_Mito.paf"
+fi
 
 if [[ "${skip_mapping}" == "yes" ]]; then
     echo "Skipping mapping step — using existing ${PAF}.gz"
@@ -223,21 +311,16 @@ if [[ "${skip_mapping}" == "yes" ]]; then
         exit 1
     fi
 else
-    if [[ -z "${rev}" || "${rev}" == "no" ]]; then
-        echo "Running single-end mapping..."
-        run_mapping "${fwd}" | gzip >"${PAF}.gz"
-    else
-        if [[ -z "${fwd}" || -z "${rev}" ]]; then
-            echo "Error: Both forward and reverse reads must be provided for paired-end mapping."
-            exit 1
+    if [[ -n "${fwd}" ]]; then
+        if [[ -z "${rev}" || "${rev}" == "no" ]]; then
+            echo "Running single-end mapping..."
+            run_mapping "${fwd}" | gzip >"${PAF}.gz"
+        else
+            echo "Running paired-end mapping..."
+            run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
         fi
-        echo "Running paired-end mapping..."
-        run_mapping "${fwd} ${rev}" | gzip >"${PAF}.gz"
     fi
 
-    ###########################################################################
-    #                    Mapping on Merged Reads                              #
-    ###########################################################################
     if [[ -n "${merged}" && "${merged}" != "no" ]]; then
         if [[ ! -f "${merged}" ]]; then
             echo "Error: Merged reads file '${merged}' does not exist."
@@ -248,34 +331,35 @@ else
     fi
 fi
 
-
+if [[ ! -f "${PAF}.gz" ]]; then
+    echo "Error: PAF file '${PAF}.gz' was not created."
+    exit 1
+fi
 
 ###############################################################################
 #                        Coverage Calculation                                 #
 ###############################################################################
 COVERAGE_OUT="${Output}/mapping/Mito_coverage.txt"
+if [[ -n "${prefix}" ]]; then
+    COVERAGE_OUT="${Output}/mapping/${prefix}_Mito_coverage.txt"
+fi
 
 if [[ "${skip_mapping}" == "yes" && -f "${COVERAGE_OUT}" ]]; then
     echo "Skipping coverage calculation — reusing existing ${COVERAGE_OUT}"
 else
-    echo "Calculating coverage of mapped reads on reference..."
+    echo "Calculating per-reference coverage..."
     python3 - <<'PYEOF' "${PAF}.gz" "${COVERAGE_OUT}" "${quality}"
 import sys
 import gzip
 import math
 from collections import defaultdict
 
-paf_file    = sys.argv[1]
-out_file    = sys.argv[2]
-min_mapq    = int(sys.argv[3])
+paf_file = sys.argv[1]
+out_file = sys.argv[2]
+min_mapq = int(sys.argv[3])
 
-# Use difference arrays for O(n + ref_len) coverage calculation instead of O(n * read_len)
-# diff_arrays[ref_name][pos] stores the increment/decrement for the running depth
 diff_arrays = defaultdict(lambda: defaultdict(int))
 ref_lengths = {}
-
-# Track (read_name, ref_name) pairs already counted to avoid double-counting
-# a read that has both a primary and a secondary alignment to the same reference
 seen_read_ref = set()
 
 opener = gzip.open if paf_file.endswith(".gz") else open
@@ -293,29 +377,25 @@ with opener(paf_file, "rt") as fh:
         mapq      = int(parts[11])
         ref_lengths[ref_name] = ref_len
 
-        # Enforce MQ threshold on all (primary-only) alignments
         if mapq < min_mapq:
             continue
 
-        # Skip if this read has already been counted on this reference
         key = (read_name, ref_name)
         if key in seen_read_ref:
             continue
         seen_read_ref.add(key)
 
-        # Difference array: +1 at start, -1 at end
         diff_arrays[ref_name][ref_start] += 1
         diff_arrays[ref_name][ref_end]   -= 1
 
 with open(out_file, "w") as out:
     out.write("reference\tref_length\tmean_coverage\tstd_coverage\tpct_covered\n")
     for ref_name, ref_len in sorted(ref_lengths.items()):
-        diff = diff_arrays[ref_name]
-        # Reconstruct depth via running sum over difference array
-        depth      = 0
-        covered    = 0
-        sum_d      = 0
-        sum_sq_d   = 0
+        diff  = diff_arrays[ref_name]
+        depth = 0
+        covered = 0
+        sum_d   = 0
+        sum_sq_d = 0
         for pos in range(ref_len):
             depth    += diff.get(pos, 0)
             sum_d    += depth
@@ -330,36 +410,54 @@ with open(out_file, "w") as out:
 
 print(f"Coverage statistics written to: {out_file}")
 PYEOF
-fi  # end skip_mapping coverage guard
+fi
 
 ###############################################################################
-#                        Parse PAF and Calculate Coverage                         #
+#                        Parse PAF and Assign Taxonomy                        #
 ###############################################################################
-echo "Parsing PAF and calculating RMUS/taxonomic proportions..."
-python "${WD}/scripts/LinkTaxonomy.py" \
-    --Nodes "${WD}/data/refseq_mito/NCBI_taxdump/nodes.dmp" \
-    --Names "${WD}/data/refseq_mito/NCBI_taxdump/names.dmp" \
+output_base="${Output}/mapping/Mito_summary"
+if [[ -n "${prefix}" ]]; then
+    output_base="${Output}/mapping/${prefix}_Mito_summary"
+fi
+
+echo "Parsing PAF and assigning taxonomy..."
+python "${SCRIPT_DIR}/LinkTaxonomy.py" \
+    --Nodes "${NODES}" \
+    --Names "${NAMES}" \
     --PAF "${PAF}.gz" \
     --Coverage "${COVERAGE_OUT}" \
     --CovThreshold "${cov_threshold}" \
     --TaxonomicHierarchy "${taxonomic_hierarchy}" \
     --MapQuality "${quality}" \
-    --output "${Output}/mapping/Mito_summary"
+    --output "${output_base}"
+
 ###############################################################################
 #                        Plotting Results                                     #
 ###############################################################################
+summary_file="${output_base}.txt"
+
+if [[ ! -f "${summary_file}" ]]; then
+    echo "Error: Mito summary file '${summary_file}' was not created."
+    exit 1
+fi
+
+if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
+    echo "Error: Mito summary file '${summary_file}' is empty or has no data."
+    exit 1
+fi
+
 echo "Plotting results..."
-Rscript "${WD}/scripts/process_files.R" ${Output} ${taxonomic_hierarchy} 2>&1 | grep -v 'Fontconfig error'
+Rscript "${SCRIPT_DIR}/process_files.R" "${Output}" "${taxonomic_hierarchy}" "${prefix}"
 
 ###############################################################################
 #                        PAF Alignment Coverage Plots                         #
 ###############################################################################
 echo "Generating per-reference PAF alignment plots (top ${top_n} references)..."
-Rscript "${WD}/scripts/plot_paf_alignments.R" \
+Rscript "${SCRIPT_DIR}/plot_paf_alignments.R" \
     "${Output}" \
     "${PAF}.gz" \
-    "${Output}/mapping/Mito_summary.ref_summary.txt" \
-    "${top_n}" 2>&1 | grep -v 'Fontconfig error'
+    "${output_base}.ref_summary.txt" \
+    "${top_n}"
 
 ###############################################################################
 #                        Pipeline Completed                                   #

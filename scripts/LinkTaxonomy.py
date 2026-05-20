@@ -1,6 +1,6 @@
+import functools
 from collections import defaultdict as d
 import sys
-import functools
 from optparse import OptionParser, OptionGroup
 
 # Author: Martin Kapun
@@ -36,7 +36,7 @@ rank_dict = {}
 names = {}
 
 def load_data(x):
-    ''' import data either from a gzipped or or uncrompessed file or from STDIN'''
+    ''' import data either from a gzipped or uncompressed file or from STDIN'''
     import gzip
     if x == "-":
         y = sys.stdin
@@ -97,16 +97,13 @@ def load_coverage(coverage_file, threshold):
 
 def main():
 
-    #check if all required options are provided
-    if not options.Tax or not options.Names or not options.PAF or not options.OUT:
+    if not options.Tax or not options.Names or not options.PAF or not options.OUT or not options.Coverage:
         parser.print_help()
-        sys.exit(1) 
+        sys.exit(1)
 
     print("Loading taxonomy data from nodes.dmp and names.dmp ...")
     with load_data(options.Tax) as node:
-
         for line in node:
-            # Split the line by tab and remove leading/trailing whitespace
             its = [x.replace("\t", "") for x in line.rstrip().split("|")]
             parents[its[0]] = its[1]
             rank_dict[its[0]] = its[2]
@@ -127,9 +124,7 @@ print(
 
 
 def get_alignment_score(fields):
-    """Return the best available alignment score from PAF optional fields.
-    Primary alignments carry ms:i (mate score / alignment score).
-    Falls back to 0 if the tag is absent."""
+    """Return the best available alignment score from PAF optional fields."""
     for f in fields[12:]:
         if f.startswith("ms:i:"):
             return int(f[5:])
@@ -166,11 +161,9 @@ ref_to_name = {}
 ref_to_species = {}
 
 with open(options.OUT+".txt", 'wt') as export:
-    # write header to output file
     export.write(
         "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\n")
     for seqId, hit_list in best_hits.items():
-        # Each read maps to one reference; take the first entry
         lines = hit_list[0]
         ref_name = lines[5]
         taxId = ref_name.split("|")[1]
@@ -182,7 +175,6 @@ with open(options.OUT+".txt", 'wt') as export:
             continue
 
         node_path, name_path = taxon_trace(taxId)
-        # Build ordered list for the 8 standard ranks; fill NA where absent
         rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
         name_path = []
         for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
@@ -195,17 +187,14 @@ with open(options.OUT+".txt", 'wt') as export:
         export.write(seqId + "\t" + taxId + "\t" +
                      lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
 
-        # Track read counts per ref_name for ranking
         ref_read_counts[ref_name] += 1
         ref_to_taxid[ref_name] = taxId
-        # Build a clean taxon label based on the chosen taxonomic hierarchy
         rank_index = {"domain": 0, "kingdom": 1, "phylum": 2, "class": 3,
                       "order": 4, "family": 5, "genus": 6, "species": 7}
         chosen_rank = options.TaxonomicHierarchy.lower()
-        idx = rank_index.get(chosen_rank, 7)  # default to species
+        idx = rank_index.get(chosen_rank, 7)
         label = name_path[idx] if name_path[idx] != "NA" else "Unknown"
         ref_to_name[ref_name] = "_".join(label.split())
-        # Always store the species binomial independently (used in plot titles)
         species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
         ref_to_species[ref_name] = "_".join(species_label.split())
 

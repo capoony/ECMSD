@@ -13,10 +13,20 @@ if (length(args) < 2) {
 
 Output <- args[1]
 Taxon <- args[2]
-Prefix <- if (length(args) >= 3) paste0(args[3], "_") else ""
+Prefix <- if (length(args) >= 3 && nchar(args[3]) > 0) paste0(args[3], "_") else ""
+
+# Create output directory if it doesn't exist
+if (!dir.exists(file.path(Output, "mapping"))) {
+  dir.create(file.path(Output, "mapping"), recursive = TRUE)
+}
 
 # Read summary data (use fread for fast I/O on large files)
-summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
+summary_file <- file.path(Output, "mapping", paste0(Prefix, "Mito_summary.txt"))
+
+if (!file.exists(summary_file)) {
+  stop(paste("Error: Mito summary file", summary_file, "does not exist."))
+}
+
 data <- as.data.frame(data.table::fread(summary_file, sep = "\t", header = TRUE))
 
 # Keep only primary alignments (MappingQuality > 0; secondaries always have MQ=0
@@ -57,7 +67,7 @@ if (length(top_taxa_names) == 0 || nrow(top_taxa) == 0) {
   stop("No taxa found — check input data or filtering conditions.")
 }
 
-# Plot histogram of read lengths for top 10 taxa make sure that the barwidth is always 1
+# Plot histogram of read lengths for top 10 taxa
 p1 <- ggplot(top_taxa, aes(x = Length, y = TotalReads, color = !!sym(Taxon))) +
   geom_col(width = 1) +
   facet_wrap(as.formula(paste("~", Taxon)), scales = "free_y") +
