@@ -5,9 +5,11 @@ channels:
   - defaults
 dependencies:
   - python=3.11
-  - numpy
   - r-base=4.3
   - r-tidyverse
+  - r-gridextra
+  - r-data.table
   - minimap2
+  - bbmap
   - pigz
-  - openjdk=17
+  - wget

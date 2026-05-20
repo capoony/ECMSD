@@ -33,7 +33,37 @@
 
 ---
 
-## v1.0 — Initial release (`ECMSD_old.sh`)
+## v1.1.0 — Database integration & installation overhaul (2026-03-24)
+
+### Added
+
+- **`ECMSD.sh`**: `--create-db` / `-z` — triggers `MakeRef.sh` to build the reference database in `--db-folder` and exits; no analysis is run
+- **`ECMSD.sh`**: `--db-folder` / `-d` — explicit path to the reference database folder; if required files are absent the pipeline auto-invokes `MakeRef.sh` to generate them before proceeding
+- **`ECMSD.sh`**: `--prefix` / `-p` — prefix for output file names (PAF, summary, plots)
+- **`ECMSD.sh`**: dynamic script-path resolution — detects conda install (`$CONDA_PREFIX/lib/ecmsd/`) vs direct repo clone and sets `SCRIPT_DIR` / `SHELL_DIR` accordingly
+- **`shell/install.sh`**: new script that installs all dependencies (minimap2, bbmap, R, pigz, …) into the active conda environment via `conda install` and copies scripts + `ECMSD` entry-point into `$CONDA_PREFIX`
+- **`conda/build.sh`**: conda recipe build script — copies shell scripts and R/Python scripts into `$PREFIX/lib/ecmsd/` and installs the `ECMSD` entry-point in `$PREFIX/bin/`
+- **`conda/ecmsd_env.yaml`**: conda environment definition (Python 3.11, NumPy, R 4.3, r-tidyverse, minimap2, pigz, openjdk 17)
+- **`LICENSE`**: MIT licence added to the repository
+
+### Changed
+
+- **`shell/MakeRef.sh`**: completely refactored from a linear script into modular, resumable functions — each step (genome download, accession-to-taxid download, taxid extraction, FASTA header renaming, low-complexity masking, NCBI taxonomy dump) checks whether its output already exists and skips if so; signature changed to `MakeRef.sh <DB_FOLDER> <SCRIPT_DIR> <THREADS>`
+- **`shell/MakeRef.sh`**: framing corrected from "Kraken2 database" to "minimap2 reference database"
+- **`ECMSD.sh`**: `--db-folder` is now required for analysis runs; the old hardcoded fallback path (`data/refseq_mito`) is removed
+- **`scripts/LinkTaxonomy.py`**: validation added for required options; exits with a help message if any are missing
+- **`scripts/renameFASTA_taxid.py`**: removed unused `--logical` and `--param` arguments; added required-option and file-existence checks; fixed dict-assignment bug (`IDlist[TaxidDict[name]]` had no assignment — now `= True`)
+
+### Removed
+
+- **`ECMSD.sh`**: `--skip_environment` / `-s` (conda activation is now handled entirely by `install.sh` / `build.sh`)
+- **`shell/kraken2.sh`**: Kraken2-based workflow retired
+- **`shell/requirements.sh`**: superseded by `install.sh`
+- **`shell/trim.sh`**: trimming step removed from the pipeline
+
+---
+
+## v1.0 — Initial release (`ECMSD.sh`)
 
 - minimap2 short-read alignment (`-x sr`, `--secondary=no`), MQ-filtered with awk
 - `LinkTaxonomy.py` taxonomy linking via NCBI nodes/names dump

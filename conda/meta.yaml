@@ -22,10 +22,11 @@ requirements:
     - bbmap
     - r-base
     - r-tidyverse
+    - r-gridextra
+    - r-data.table
     - pigz
     - wget
     - python >=3.6
-    - numpy
 
 test:
   commands:

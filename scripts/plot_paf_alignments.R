@@ -59,7 +59,7 @@ writeLines(top_refs$ref_name, refs_tmp)
 # Build awk command: load ref names into a hash, then print matching PAF lines
 # (column 6 = tname), selecting only the first 12 fields
 awk_cmd <- sprintf(
-  "zcat %s | awk -F'\\t' 'NR==FNR{refs[$1]=1; next} ($6 in refs){for(i=1;i<=12;i++) printf \"%%s%%s\", $i, (i<12?\"\\t\":\"\\n\")}' %s -",
+  "gzip -dc %s | awk -F'\\t' 'NR==FNR{refs[$1]=1; next} ($6 in refs){for(i=1;i<=12;i++) printf \"%%s%%s\", $i, (i<12?\"\\t\":\"\\n\")}' %s -",
   shQuote(paf_file), shQuote(refs_tmp)
 )
 
@@ -115,7 +115,7 @@ for (i in seq_len(nrow(top_refs))) {
   paf_sub <- paf_by_tname[[ref_name]]
   if (!is.null(paf_sub)) paf_sub <- paf_sub[!is.na(paf_sub$tname), ]
 
-  if (nrow(paf_sub) == 0) {
+  if (is.null(paf_sub) || nrow(paf_sub) == 0) {
     cat(sprintf(
       "  [%d/%d] No alignments found for %s – skipping\n",
       i, nrow(top_refs), ref_name
