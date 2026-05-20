@@ -1,29 +1,37 @@
+#!/usr/bin/env Rscript
+
 # Load required libraries
 suppressPackageStartupMessages({
-  library(data.table)
   library(tidyverse)
   library(rlang)
 })
 
 # Parse arguments
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 2) {
-  stop("Usage: Rscript process_files.R <OutputDir> <TaxonColumn> [<Prefix>]")
+if (length(args) < 3) {
+  stop("Usage: Rscript plot_mito_summary.R <MitoSummaryPath> <OutputDir> <TaxonColumn> [<Prefix>]")
 }
 
-Output <- args[1]
-Taxon <- args[2]
-Prefix <- if (length(args) >= 3) paste0(args[3], "_") else ""
+MitoSummaryPath <- args[1]
+Output <- args[2]
+Taxon <- args[3]
+Prefix <- ifelse(length(args) >= 4, paste0(args[4], "_"), "")
 
-# Read summary data (use fread for fast I/O on large files)
-summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
-data <- as.data.frame(data.table::fread(summary_file, sep = "\t", header = TRUE))
+# Create output directory if it doesn't exist
+if (!dir.exists(file.path(Output, "mapping"))) {
+  dir.create(file.path(Output, "mapping"), recursive = TRUE)
+}
 
-# Keep only primary alignments (MappingQuality > 0; secondaries always have MQ=0
-# in minimap2) and deduplicate so each read is counted exactly once.
-data <- data %>%
-  filter(MappingQuality > 0) %>%
-  distinct(SeqID, .keep_all = TRUE)
+#Check if MitoSummaryPath exists
+if (!file.exists(MitoSummaryPath)) {
+  stop(paste("Error: Mito summary file", MitoSummaryPath, "does not exist."))
+}
+
+# Read summary data
+#summary_file <- file.path(Output, "mapping", "Mito_summary.txt")
+data <- read.table(MitoSummaryPath, header = TRUE, sep = "\t")
+
+print(paste("Processing Mito summary data from:", MitoSummaryPath))
 
 # Summarize read counts by taxon and length
 data_sub <- data %>%
@@ -35,7 +43,7 @@ data_sub <- data %>%
 # Save summarized table
 write.table(
   data_sub,
-  file = file.path(Output, "mapping", paste0(Prefix, "Mito_summary_", Taxon, ".txt")),
+  file = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, ".txt")),
   sep = "\t", row.names = FALSE, quote = FALSE
 )
 
@@ -66,7 +74,7 @@ p1 <- ggplot(top_taxa, aes(x = Length, y = TotalReads, color = !!sym(Taxon))) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggsave(
-  filename = file.path(Output, "mapping", paste0(Prefix, "Mito_summary_", Taxon, "_ReadLengths.png")),
+  filename = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_ReadLengths.png")),
   plot = p1, width = 10, height = 6, dpi = 300
 )
 
@@ -83,7 +91,7 @@ data_sub2 <- data_sub %>%
 # Save proportions table
 write.table(
   data_sub2,
-  file = file.path(Output, "mapping", paste0(Prefix, "Mito_summary_", Taxon, "_proportions.txt")),
+  file = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_proportions.txt")),
   sep = "\t", row.names = FALSE, quote = FALSE
 )
 
@@ -95,7 +103,7 @@ p2 <- ggplot(data_sub2, aes(x = !!sym(Taxon), y = Proportion)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggsave(
-  filename = file.path(Output, "mapping", paste0(Prefix, "Mito_summary_", Taxon, "_Proportions.png")),
+  filename = file.path(Output, "mapping", paste0(Prefix,"Mito_summary_", Taxon, "_Proportions.png")),
   plot = p2, width = 10, height = 6, dpi = 150
 )
 

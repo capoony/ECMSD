@@ -2,307 +2,375 @@
 
 ## Overview
 
-ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinformatics pipeline for the detection and taxonomic classification of mitochondrial sequences from high-throughput Illumina sequencing data. It aligns reads against a comprehensive NCBI RefSeq mitochondrial reference database using minimap2, filters alignments by coverage and quality, assigns taxonomy via the NCBI taxonomy database, and generates quantitative summaries and visualisation plots.
+ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinformatics pipeline designed for the detection and taxonomic classification of mitochondrial sequences from high-throughput sequencing data. The pipeline uses minimap2 for fast sequence alignment against a comprehensive mitochondrial reference database and provides quantitative analysis through Read Mapping Uniformity Score (RMUS) calculations.
 
 ## Features
 
-- **Fast mitochondrial sequence detection** using minimap2 short-read alignment
-- **Comprehensive reference database** built from NCBI RefSeq mitochondrial genomes (repeat-masked)
-- **Taxonomic classification** at configurable hierarchy levels (species → kingdom)
-- **Quality-based filtering**: separate, correct handling of primary (MQ threshold) and secondary alignments (chaining-score threshold)
-- **Coverage-based reference filtering**: only references with sufficient breadth of coverage are retained
-- **Secondary alignment support**: configurable number of secondary alignments per read for highly similar reference genomes
-- **Per-reference alignment and depth plots** for the top-N references
-- **Proportional abundance plots** based on unique primary-alignment reads only
-- **Skip-mapping mode** to rerun analysis steps on existing PAF output without re-mapping
-- **Conda environment management** for reproducible results
-
----
+- **Fast mitochondrial sequence detection** using minimap2 alignment
+- **Comprehensive reference database** built from NCBI RefSeq mitochondrial genomes
+- **Taxonomic classification** with customizable hierarchy levels
+- **Quality-based filtering** with configurable mapping quality thresholds
+- **RMUS (Read Mapping Uniformity Score)** calculation for quantitative analysis
+- **Automated visualization** of results with R-based plotting
+- **Support for multiple input formats**: single-end, paired-end, and merged reads
+- **Decoupled database management**: the reference database is built once and shared across runs
 
 ## Pipeline Workflow
 
-1. **Reference Database Construction** (`MakeRef.sh`): Downloads NCBI RefSeq mitochondrial genomes, repeat-masks them with BBMask, and embeds taxIDs in the FASTA headers
-2. **Sequence Mapping**: Aligns reads to the reference with minimap2 (`-x sr`, secondary alignments enabled); primary alignments are filtered by mapping quality (MQ ≥ threshold); secondary alignments are filtered by the s1 chaining score
-3. **Coverage Calculation**: Computes per-reference breadth of coverage and mean/std depth using a vectorised difference-array algorithm; references below the coverage threshold are discarded
-4. **Taxonomic Assignment** (`LinkTaxonomy.py`): Links each alignment to the full NCBI taxonomic lineage; primary alignments are again MQ-filtered to ensure consistency
-5. **Proportional Abundance Analysis** (`process_files.R`): Summarises read counts and proportions per taxon using **unique primary-alignment reads only** (secondary alignments excluded)
-6. **Per-Reference Alignment Plots** (`plot_paf_alignments.R`): Generates coverage breadth and sequencing depth PDFs for the top-N references using **all alignments** (including secondaries) read directly from the PAF file
+The workflow has two distinct phases:
 
----
+### Phase 1 — One-time database setup
+
+Build the reference database before running any analysis:
+
+```
+ECMSD --create-db --db-folder /path/to/db_folder
+```
+
+This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxonomy database. It only needs to be run once (or whenever you want to update the reference data). The database folder can then be shared across all subsequent analysis runs and across multiple parallel jobs.
+
+### Phase 2 — Per-sample analysis
+
+1. **Sequence Mapping**: Aligns input reads to the mitochondrial reference using minimap2
+2. **Quality Filtering**: Filters alignments based on mapping quality threshold
+3. **Taxonomic Assignment**: Links aligned sequences to taxonomic information using NCBI taxonomy
+4. **RMUS Calculation**: Computes Read Mapping Uniformity Score for quantitative assessment
+5. **Visualization**: Generates plots and summary statistics
 
 ## Requirements
 
 - Linux/Unix operating system
 - Conda package manager
-- Internet connection (for initial database download)
+- Internet connection (for database download)
 
-### Software Dependencies (automatically installed via Conda)
+### Software Dependencies (installed automatically via Bioconda or `install.sh`)
 
-| Tool | Purpose |
-|---|---|
-| minimap2 | Read alignment |
-| BBTools (bbmask) | Reference repeat masking |
-| pigz | Parallel gzip |
-| Python 3 | Coverage calculation and taxonomy linking |
-| R + tidyverse | Proportional abundance plots |
-| R + data.table | Fast file I/O for large PAF/summary files |
-| R + ggplot2 + gridExtra | Alignment and depth plots |
-
----
+- minimap2
+- BBTools (bbmask)
+- Python 3 with numpy
+- R with tidyverse
+- pigz
+- wget
 
 ## Installation
 
+### Recommended — Install via Bioconda
+
 ```bash
-git clone <repository-url>
+conda create -n ecmsd_env -c bioconda -c conda-forge ecmsd
+conda activate ecmsd_env
+```
+
+This installs ECMSD and all dependencies in a single step.
+
+### Alternative — Manual installation via `install.sh`
+
+<details>
+<summary>Click to expand manual installation steps</summary>
+
+**Step 1 — Clone the repository**
+
+```bash
+git clone https://github.com/capoony/ECMSD.git
 cd ECMSD
 ```
 
-Dependencies and the reference database are installed automatically on the first run.
+**Step 2 — Create and activate a conda environment**
 
----
+You can use the provided environment file:
+
+```bash
+conda env create -f conda/ecmsd_env.yaml
+conda activate ecmsd_env
+```
+
+Or create a minimal environment manually:
+
+```bash
+conda create -n ecmsd_env
+conda activate ecmsd_env
+```
+
+**Step 3 — Install dependencies and scripts**
+
+With your conda environment active, run the installation script:
+
+```bash
+bash shell/install.sh
+```
+
+This installs all required dependencies (minimap2, bbmap, R, Python packages, etc.) into the active conda environment and registers the `ECMSD` command.
+
+</details>
+
+### Build the reference database
+
+Regardless of the installation method, the reference database must be created before running any analysis. This is a one-time step:
+
+```bash
+ECMSD --create-db --db-folder /path/to/db_folder
+```
+
+The database folder can be placed anywhere and reused across all future runs. This step downloads several GB of data from NCBI, so ensure sufficient disk space (~5–10 GB) and a stable internet connection.
+
+> **Why is the database a separate step?**
+> Separating database creation from analysis prevents race conditions when multiple ECMSD instances run in parallel (e.g. in a Snakemake workflow). In the old design, all parallel jobs would compete to create the same database simultaneously. By building the database once upfront, each analysis job simply reads from the shared, pre-built database. This also enables pipelines such as the **[pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)** to run contamination checks from scratch, downloading all required reference files in a single dedicated setup step before launching parallel analysis jobs.
+
+## Test Data
+
+ECMSD includes a test dataset to verify the installation and demonstrate pipeline functionality. The test data consists of historic DNA (hDNA) sequencing reads from an unknown origin.
+
+### Test Dataset Details
+
+- **File**: `TestData/merged.fastq.gz` (~37 MB)
+- **Content**: Merged FASTQ reads from hDNA sequencing
+- **Purpose**: Pipeline validation and demonstration
+- **Origin**: Unknown sample (for testing purposes only)
+
+### Running the Test
+
+```bash
+# Navigate to ECMSD directory
+cd /path/to/ECMSD
+
+# Step 1: create the database (first time only)
+ECMSD --create-db --db-folder /path/to/db_folder
+
+# Step 2: run the pipeline on the test data
+ECMSD --fwd /path/to/TestData/merged.fastq.gz \
+      --out TestOutput \
+      --db-folder /path/to/db_folder \
+      --threads 20 \
+      --binsize 1000 \
+      --RMUS-threshold 0.15 \
+      --mapping_quality 20 \
+      --taxonomic-hierarchy genus \
+      --force
+```
+
+### Expected Test Results
+
+The test run should complete successfully and generate:
+
+- Alignment results in `TestOutput/mapping/Mito.paf.gz`
+- Taxonomic summary in `TestOutput/mapping/Mito_summary.txt`
+- Visualization plots in `TestOutput/mapping/`
+- Log files in `TestOutput/logs/`
+
+### Test Data Validation
+
+A successful test run indicates that:
+
+- All dependencies are properly installed
+- The reference database is correctly built
+- The pipeline can process FASTQ data
+- Output files are generated in the expected format
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
+# First: create the database (once)
+ECMSD --create-db --db-folder /path/to/db
+
 # Single-end reads
-./shell/ECMSD.sh -f reads.fastq -o output_directory/
+ECMSD -f reads.fastq -o output_directory/ -d /path/to/db
 
 # Paired-end reads
-./shell/ECMSD.sh -f reads_R1.fastq -r reads_R2.fastq -o output_directory/
+ECMSD -f reads_R1.fastq -r reads_R2.fastq -o output_directory/ -d /path/to/db
 
-# Paired-end + separately merged reads
-./shell/ECMSD.sh -f reads_R1.fastq -r reads_R2.fastq -m merged.fastq -o output_directory/
+# Merged reads only
+ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
+
+# Paired-end with additional merged reads
+ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_directory/ -d /path/to/db
 ```
 
 ### Command Line Options
 
-#### Required Arguments
+#### Required Arguments for Analysis
 
-| Flag | Description |
-|---|---|
-| `-f, --fwd` | Path to the forward (or single-end/merged) FASTQ file |
-| `-o, --out` | Path to the output folder |
+- `-f, --fwd`: Path to the forward or single-end FASTQ file (required unless `--merged` is used)
+- `-m, --merged`: Path to a merged FASTQ file (required unless `--fwd` is used; cannot be combined with `--fwd`/`--rev`)
+- `-o, --out`: Path to the output folder
+- `-d, --db-folder`: Path to the database folder (must be created first with `--create-db`)
+
+#### Required Arguments for Database Creation
+
+- `-z, --create-db`: Create a new reference database
+- `-d, --db-folder`: Path to the folder where the database will be stored
 
 #### Optional Arguments
 
-| Flag | Default | Description |
-|---|---|---|
-| `-r, --rev` | — | Path to the reverse FASTQ file (paired-end) |
-| `-m, --merged` | — | Path to an additional merged FASTQ file |
-| `-u, --cov-threshold` | 50 | Minimum % of a reference covered by reads for it to be retained (0–100) |
-| `-s, --score-ratio` | 0.9 | Minimum ratio of secondary-to-primary chaining score for a secondary alignment to be retained (0–1) |
-| `-a, --min-score` | 20 | Minimum s1 chaining score for secondary alignments |
-| `-N, --max-secondary` | 5 | Maximum number of secondary alignments per read emitted by minimap2. **Increase this (e.g. 20) when many highly similar reference genomes are present** |
-| `-n, --top-n` | 25 | Number of top references for which alignment/depth PDFs are generated |
-| `-q, --mapping_quality` | 20 | Minimum mapping quality for **primary** alignments |
-| `-t, --threads` | 10 | Number of CPU threads |
-| `-c, --force` | — | Force overwrite of existing output files |
-| `-k, --skip-mapping` | — | Skip the mapping and coverage steps; reuse existing `Mito.paf.gz` and `Mito_coverage.txt`. Useful for re-running analysis with different parameters without re-mapping |
-| `-x, --taxonomic-hierarchy` | species | Taxonomic level for classification (`species`, `genus`, `family`, `order`, `phylum`, `kingdom`) |
-| `-v, --version` | — | Show version and exit |
-| `-h, --help` | — | Show help and exit |
+- `-r, --rev`: Path to the reverse FASTQ file (for paired-end data; requires `--fwd`)
+- `-b, --binsize`: Bin size for RMUS analysis (default: 1000)
+- `-u, --RMUS-threshold`: RMUS threshold for analysis (default: 0.15)
+- `-q, --mapping_quality`: Mapping quality threshold (default: 20)
+- `-t, --threads`: Number of threads to use (default: 10)
+- `-c, --force`: Force overwrite of existing output files
+- `-x, --taxonomic-hierarchy`: Taxonomic hierarchy level (default: species)
+- `-p, --prefix`: Prefix for output files (default: None)
+- `-v, --version`: Show version and exit
+- `-h, --help`: Show help message and exit
 
-### Example — Full Run
+### Advanced Examples
 
 ```bash
-bash shell/ECMSD.sh \
-    --fwd reads_R1.fastq.gz \
-    --rev reads_R2.fastq.gz \
-    --merged merged.fastq.gz \
-    --out results/ \
-    --threads 20 \
-    --cov-threshold 10 \
-    --mapping_quality 20 \
-    --score-ratio 0.9 \
-    --max-secondary 20 \
-    --taxonomic-hierarchy genus \
-    --top-n 25 \
-    --force
+# High-stringency analysis with custom thresholds
+ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db \
+  -q 30 -u 0.25 -b 500 -t 16
+
+# Genus-level taxonomic classification
+ECMSD -f reads.fastq -o results/ -d /path/to/db -x genus
+
+# Force overwrite existing results
+ECMSD -f reads.fastq -o existing_results/ -d /path/to/db -c
+
+# Add a prefix to output files
+ECMSD -f reads.fastq -o results/ -d /path/to/db -p sample01
 ```
 
-### Example — Rerun Analysis on Existing Mapping Results
+### Running Multiple Instances in Parallel
+
+Because the database is maintained separately, multiple ECMSD jobs can safely run in parallel against the same database without any risk of file conflicts:
 
 ```bash
-bash shell/ECMSD.sh \
-    --fwd reads_R1.fastq.gz \
-    --rev reads_R2.fastq.gz \
-    --out results/ \
-    --cov-threshold 5 \
-    --taxonomic-hierarchy genus \
-    --skip-mapping
-```
+# Build the database once
+ECMSD --create-db --db-folder /shared/db
 
----
+# Then run many samples concurrently (e.g. via a scheduler or Snakemake)
+ECMSD -f sample1.fastq -o out_sample1/ -d /shared/db
+ECMSD -f sample2.fastq -o out_sample2/ -d /shared/db
+ECMSD -f sample3.fastq -o out_sample3/ -d /shared/db
+```
 
 ## Output Files
+
+The pipeline generates the following output structure:
 
 ```text
 output_directory/
 ├── mapping/
-│   ├── Mito.paf.gz                          # Compressed PAF alignment file
-│   ├── Mito_coverage.txt                    # Per-reference coverage statistics
-│   ├── Mito_summary.txt                     # Per-alignment taxonomic assignments (all alignments)
-│   ├── Mito_summary.ref_summary.txt         # Per-reference read counts and taxon labels (ranked)
-│   ├── Mito_summary_<taxon>.txt             # Read counts per taxon × read length (primary reads only)
-│   ├── Mito_summary_<taxon>_proportions.txt # Proportional abundance per taxon (primary reads only)
-│   ├── Mito_summary_<taxon>_ReadLengths.png # Read length histogram for top 10 taxa
-│   ├── Mito_summary_<taxon>_Proportions.png # Proportional abundance bar chart
-│   └── alignment_plots/
-│       └── <rank>_taxid<id>_<taxon>_<species>.pdf  # Coverage + depth PDF per reference
+│   ├── Mito.paf.gz                              # Compressed alignment results
+│   ├── Mito_summary.txt                         # Taxonomic summary with RMUS scores
+│   ├── Mito_summary_<taxon>.txt                 # Per-taxon summary
+│   ├── Mito_summary_<taxon>_ReadLengths.png     # Read length distribution plot
+│   └── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot
 └── logs/
-    └── logfile.log                          # minimap2 stderr and pipeline log
+    └── minimap2.log                             # Mapping log
 ```
 
 ### Output File Descriptions
 
-| File | Description |
-|---|---|
-| `Mito.paf.gz` | All filtered alignments in PAF format (primary MQ-filtered; secondaries s1-filtered) |
-| `Mito_coverage.txt` | Columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered` |
-| `Mito_summary.txt` | One row per alignment: `SeqID`, `TaxID`, `Length`, `MappingQuality`, full lineage columns |
-| `Mito_summary.ref_summary.txt` | Ranked list of references: `ref_name`, `taxid`, `taxon_name`, `species_name`, `read_count` |
-| `Mito_summary_<taxon>_proportions.txt` | Proportions based on unique primary-alignment reads |
-| `alignment_plots/*.pdf` | Two-panel PDF per reference: alignment coverage breadth (top) + sequencing depth (bottom) |
+- **Mito.paf.gz**: Compressed PAF format alignment file containing all mitochondrial sequence alignments
+- **Mito_summary.txt**: Tab-separated file with taxonomic assignments, read counts, and RMUS scores
+- **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
+- **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
+- **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
+- **minimap2.log**: Detailed minimap2 alignment log
 
----
+## Parameters Explanation
 
-## Filtering Logic in Detail
+### RMUS (Read Mapping Uniformity Score)
 
-### Primary Alignments
+RMUS is a novel metric based on [Shannon's entropy](https://arxiv.org/pdf/1405.2061) that assesses the uniformity of read distribution across genomes. Higher RMUS values indicate more uniform coverage, which can help distinguish authentic mitochondrial content from mapping artifacts, contamination or overall low-quality alignments.
 
-Retained when **mapping quality ≥ `--mapping_quality`** (MQ field, PAF column 12). This threshold is applied consistently at three points:
+RMUS is calculated as follows:
 
-1. In the minimap2 awk post-filter (writing the PAF)
-2. In the inline Python coverage calculation
-3. In `LinkTaxonomy.py` (via `--MapQuality`)
-
-### Secondary Alignments
-
-minimap2 always sets MQ = 0 for secondary alignments. They are therefore **not** subject to the MQ filter. Instead they are retained when the **s1 chaining score ≥ `--min-score`** and the secondary/primary score ratio ≥ `--score-ratio` (controlled by minimap2 `-p`).
-
-Use **`--max-secondary`** to control how many secondaries per read minimap2 emits. The default is 5; for datasets with many highly similar reference genomes (e.g. congeneric mitogenomes) increasing this to 20 or more ensures that all close relatives receive mapped reads.
-
-### Coverage Threshold
-
-After mapping, per-reference breadth of coverage is calculated. Only references where `pct_covered ≥ --cov-threshold` are passed to the taxonomic assignment step.
-
-### Proportional Abundance
-
-Read proportions (`process_files.R`) are computed from **unique primary-alignment reads only**: secondary alignments (MQ = 0) are excluded, and each read ID is counted once (`distinct(SeqID)`). This avoids inflating counts from multi-mapping reads.
-
-### Alignment/Depth Plots
-
-The per-reference PDFs (`plot_paf_alignments.R`) use **all alignments** from the PAF (including secondaries) to accurately represent true sequencing depth across the reference, which is the biologically relevant quantity for these plots.
-
----
-
-## Parameters
-
-### `--cov-threshold`
-
-Minimum percentage of reference positions covered by at least one read. References below this threshold are excluded from taxonomy assignment and downstream plots. Lowering this value retains more references but may include spurious hits.
-
-### `--score-ratio` / `--min-score`
-
-Control which secondary alignments are retained. `--score-ratio` sets the minimap2 `-p` parameter (secondary score must be ≥ ratio × primary score). `--min-score` sets the minimum absolute s1 chaining score for secondaries.
-
-### `--max-secondary`
-
-Sets minimap2 `-N`. With a large reference database containing many closely related genomes, the default of 5 may silently discard valid hits to other congeners. Increase to 20–50 for genus- or family-level analyses.
-
-### `--mapping_quality`
-
-Filters primary alignments by reliability. Higher values reduce false positives but may miss divergent true positives. Not applied to secondaries (which always have MQ = 0 in minimap2 PAF output).
-
-### `--taxonomic-hierarchy`
-
-Determines the grouping level for summary tables and plots. Supported values: `species`, `genus`, `family`, `order`, `phylum`, `kingdom`.
-
-### `--skip-mapping`
-
-Reuses existing `Mito.paf.gz` and `Mito_coverage.txt` without re-running minimap2. Only the log directory is cleared. Useful when iterating over different `--cov-threshold`, `--taxonomic-hierarchy`, or `--top-n` values.
-
----
-
-## Test Data
-
-```bash
-cd /path/to/ECMSD
-bash shell/ECMSD.sh \
-    --fwd TestData/merged.fastq.gz \
-    --out TestOutput \
-    --threads 20 \
-    --cov-threshold 10 \
-    --mapping_quality 20 \
-    --taxonomic-hierarchy genus \
-    --force
+```math
+RMUS = \frac{H}{H_{max}}
 ```
 
----
+where:
+
+- \( H \) is the Shannon entropy of the read distribution across taxonomic categories
+
+```math
+H = -\sum_{i=1}^{n} p_i \log_2(p_i)
+```
+
+- \( p_i \) is the proportion of reads assigned to category \( i \)
+- \( n \) is the total number of categories
+
+- \( H_{max} \) is the maximum possible entropy for the given number of categories
+- If \( H_{max} \) is zero, RMUS is set to zero to avoid division by zero errors.
+
+RMUS values range from 0 to 1, where 1 indicates perfect uniformity of reads across all categories (i.e. genomic bins). This metric is particularly useful for assessing if the mapping of reads is an artifact (mapping only to a single specific region), as it provides a quantitative measure of how evenly reads are distributed across the reference genomes. We assume that only a high RMUS value indicates that the original reads are likely from a specific mitochondrial genome, while low RMUS values may suggest mapping artifacts or numts. It helps in identifying potential contamination or uneven coverage that may affect downstream analyses. RMUS is calculated for each taxonomic category during the taxonomic assignment step and is included in the output summary file for easy interpretation.
+
+### Bin Size
+
+The bin size parameter determines the resolution for RMUS calculation. Smaller bins provide higher resolution but may be more sensitive to sequencing artifacts.
+
+### Mapping Quality
+
+The mapping quality threshold filters alignments based on their reliability. Higher values increase stringency but may reduce sensitivity for divergent sequences.
+
+### Taxonomic Hierarchy
+
+Determines the taxonomic level for classification (e.g., species, genus, family, order, phylum or kingdom). Lower levels provide more specific identification but may have reduced sensitivity.
 
 ## Troubleshooting
 
-| Symptom | Solution |
-|---|---|
-| `Conda environment could not be activated` | Run `conda init bash` and restart your shell |
-| `Reference data not found` | Pipeline auto-downloads on first run; check internet connectivity and disk space (~5–10 GB) |
-| `Output directory already exists` | Use `--force` to overwrite, or `--skip-mapping` to reuse existing mapping results |
-| PAF reading very slow or out-of-memory in R | The PAF is pre-filtered with `awk` before entering R; ensure `zcat` is available |
-| Too few secondary hits for closely related species | Increase `--max-secondary` (e.g. `--max-secondary 20`) |
+### Common Issues
 
----
+1. **"No conda environment is active"**
+   - Activate a conda environment before running `install.sh`: `conda activate <your-env>`
+   - If no environment exists yet, create one: `conda create -n ecmsd_env && conda activate ecmsd_env`
 
-## Version History
+2. **"No database folder provided"** or **database files missing**
+   - Build the database before running analysis: `ECMSD --create-db --db-folder /path/to/db`
+   - Ensure sufficient disk space (~5–10 GB) and internet connectivity
+   - If a previous database build was interrupted, re-run `--create-db` to complete it
 
-### v1.1 — Performance and correctness overhaul
+3. **"Output directory already exists"**
+   - Use the `-c` or `--force` flag to overwrite existing results
+   - Or specify a different output directory
 
-**New parameters**
+4. **Memory or disk space issues**
+   - Reduce the number of threads with `-t`
+   - Ensure sufficient disk space for the reference database (~5–10 GB)
 
-- `--max-secondary` (`-N`): exposes minimap2 `-N` (previously hardcoded to 5) to allow capturing all close secondary hits when many similar reference genomes are present
-- `--skip-mapping` (`-k`): reuse existing PAF and coverage files, re-run only analysis and plotting steps
+5. **Parallel jobs failing or conflicting**
+   - Ensure the database is fully built before launching parallel jobs
+   - Each job must write to its own `--out` directory
 
-**Mapping / filtering fixes**
+### Performance Optimization
 
-- Primary alignments are now MQ-filtered consistently at three points: awk post-filter, Python coverage script, and `LinkTaxonomy.py`
-- Secondary alignments (MQ always 0 in minimap2) are correctly exempted from the MQ filter and instead filtered by s1 chaining score only
-- `LinkTaxonomy.py` gained a `--MapQuality` argument to enforce the same MQ threshold as the awk filter
+- Use more threads (`-t`) on systems with multiple CPU cores
+- Adjust bin size (`-b`) based on your data characteristics
+- Consider mapping quality threshold (`-q`) based on your sequencing platform
+- Build the database on fast local storage to reduce I/O latency during mapping
 
-**Performance improvements**
+## Citation
 
-- **Coverage calculation** (inline Python): replaced O(n × read_length) per-position dict updates with a vectorised difference-array algorithm — O(n + Σref_len)
-- **`LinkTaxonomy.py`**: `taxon_trace()` is now memoised with `functools.lru_cache`, reducing repeated taxonomy-tree traversals from O(reads) to O(unique taxIds)
-- **`process_files.R`**: `read.table()` replaced with `data.table::fread()` for fast I/O on large summary files
-- **`plot_paf_alignments.R`**: `pafr::read_paf()` (slow pure-R parser that loads the entire file) replaced with a `zcat | awk | data.table::fread` pipeline that pre-filters to the top-N references before any data enters R, avoiding the 2^31-byte R string limit on large PAF files
-- **`plot_paf_alignments.R`**: `compute_depth()` row-loop replaced with a vectorised difference-array using `tabulate()` + `cumsum()`
-- **`pafr`** package removed as a dependency entirely
+If you use ECMSD in your research, please cite:
 
-**Analysis changes**
-
-- Proportional abundance (`process_files.R`): now uses **unique primary-alignment reads only** — secondary alignments (MQ = 0) are excluded and each read ID is deduplicated (`distinct(SeqID)`) before counting
-- Alignment/depth PDFs (`plot_paf_alignments.R`): continue to use **all alignments** including secondaries for accurate depth representation
-- PDF filenames now include both the taxon-rank label and the species binomial: `<rank>_taxid<id>_<taxon>_<species>.pdf`
-
-### v1.0 — Initial release
-
----
+[Citation information to be added]
 
 ## License
 
-MIT License
+MIT License (MIT)
 
-## Author
+## Authors
 
-Martin Kapun
+- Martin Kapun (idea, design, algorithm development, implementation, testing, documentation)
+- Sarah Saadain (conda environment setup, implementation, bioconda installation, testing, documentation)
 
 ## Contact
 
 For questions, issues, or feature requests, please open a GitHub issue.
 
+## Version History
+
+- **v1.1.0**: Decoupled database creation from analysis runs. The database is now built once with `--create-db --db-folder` and provided as a required parameter to all analysis runs. This prevents race conditions in parallel workflows and enables pipeline-level database management (e.g. [pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)). Added `install.sh` for explicit dependency installation.
+- **v1.0.0**: Initial release with core mitochondrial detection functionality
+
 ## Acknowledgments
 
-- [minimap2](https://github.com/lh3/minimap2) — sequence alignment
-- [BBTools](https://jgi.doe.gov/data-and-tools/software-tools/bbtools/) — sequence masking
-- [NCBI RefSeq](https://www.ncbi.nlm.nih.gov/refseq/) — mitochondrial reference genomes
-- [NCBI Taxonomy](https://www.ncbi.nlm.nih.gov/taxonomy) — taxonomic classification
+This pipeline uses several open-source tools:
+
+- minimap2 for sequence alignment
+- BBTools for sequence masking
+- NCBI RefSeq database for reference genomes
+- NCBI taxonomy database for taxonomic classification
