@@ -2,7 +2,7 @@
 
 ---
 
-## Current release — changes relative to v1.0 (`ECMSD_old.sh`) (2026-05-19)
+## Current release — v.1.2 to v1.0 (`ECMSD_old.sh`) (2026-05-19)
 
 ### Added
 
