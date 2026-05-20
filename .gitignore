@@ -4,5 +4,6 @@ TestOutput/
 #shell/trim.sh
 scripts/conda_env
 scripts/LinkTaxonomy_old.py
+scripts/logs/
 shell/ECMSD_old.sh
 .DS_Store
