@@ -2,7 +2,7 @@
 
 ---
 
-## Current release — changes relative to v1.0 (`ECMSD_old.sh`) (2026-05-19)
+## v1.2.0 — Coverage-based filtering & conda integration (2026-05-20)
 
 ### Added
 
@@ -13,6 +13,10 @@
 - **`scripts/plot_paf_alignments.R`**: new script generating per-reference alignment-breadth and depth PNGs for the top-N references (was absent in `ECMSD_old.sh`)
 - **`scripts/LinkTaxonomy.py`**: `--MapQuality` argument added so MQ filtering is consistent with the awk post-filter
 - **`scripts/LinkTaxonomy.py`**: `taxon_trace()` memoised with `functools.lru_cache`
+- **`conda/ecmsd_env.yaml`**: added `r-gridextra`, `r-data.table` dependencies
+- **`conda/meta.yaml`**: added `r-gridextra`, `r-data.table` to run requirements
+- **`shell/install.sh`**: added `r-gridextra`, `r-data.table` to conda install block
+- **`.github/workflows/auto-tag.yml`**: CI step that automatically rewrites the `version=` line in `ECMSD.sh` on each new tag and commits the change back to `main`
 
 ### Changed
 
@@ -22,13 +26,17 @@
 - **`ECMSD.sh`**: `--skip-mapping` preserves the existing PAF and coverage file while clearing only the logs directory
 - **`scripts/LinkTaxonomy.py`**: `--Bins` / `--RMUS` arguments replaced by `--Coverage`, `--CovThreshold`, and `--MapQuality`
 - **`scripts/process_files.R`**: `read.table()` replaced with `data.table::fread()`; proportional abundance computed from unique primary-alignment reads only (`distinct(SeqID)`)
-- **`scripts/plot_paf_alignments.R`**: `pafr::read_paf()` replaced with a `zcat | awk | data.table::fread` pipeline; depth calculation vectorised with `tabulate()` + `cumsum()`
+- **`scripts/plot_paf_alignments.R`**: `pafr::read_paf()` replaced with a `gzip -dc | awk | data.table::fread` pipeline (replaces `zcat` for macOS compatibility); depth calculation vectorised with `tabulate()` + `cumsum()`; fixed null-reference guard before `nrow()` check
+- **`conda/ecmsd_env.yaml`**: removed `numpy` and `openjdk=17`
+- **`shell/install.sh`**: removed `numpy` from conda install block
 
 ### Removed
 
 - **`ECMSD.sh`**: `--Binsize` / `-b` parameter (bin-based RMUS analysis removed)
 - **`ECMSD.sh`**: `--RMUS-threshold` / `-u` parameter (replaced by `--cov-threshold`)
 - **`scripts/LinkTaxonomy.py`**: `--Bins` and `--RMUS` arguments
+- **`scripts/LinkTaxonomy_old.py`**: legacy script removed from repository
+- **`shell/requirements.sh`**: superseded by `install.sh` (removed)
 - **`pafr`** R package dependency (removed entirely)
 
 ---
@@ -63,7 +71,7 @@
 
 ---
 
-## v1.0 — Initial release (`ECMSD.sh`)
+## v1.0.0 — Initial release
 
 - minimap2 short-read alignment (`-x sr`, `--secondary=no`), MQ-filtered with awk
 - `LinkTaxonomy.py` taxonomy linking via NCBI nodes/names dump
