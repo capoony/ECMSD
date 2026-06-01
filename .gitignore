@@ -4,3 +4,4 @@ TestOutput/
 #shell/trim.sh
 scripts/conda_env
 .DS_Store
+shell/ECMSD_old.sh
