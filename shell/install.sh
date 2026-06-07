@@ -32,10 +32,11 @@ conda install -y \
     "conda-forge::r-base>=4.0" \
     "conda-forge::r-tidyverse>=2.0.0" \
     "conda-forge::r-dplyr>=1.1.0" \
+    conda-forge::r-gridextra \
+    conda-forge::r-data.table \
     conda-forge::pigz \
     conda-forge::wget \
-    "conda-forge::python>=3.6" \
-    conda-forge::numpy
+    "conda-forge::python>=3.6"
 
 # Remove existing installation if present
 if [[ -d "$CONDA_PREFIX/lib/ecmsd" ]]; then

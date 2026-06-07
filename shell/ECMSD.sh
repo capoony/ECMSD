@@ -29,18 +29,19 @@ ALL ARGUMENTS:
   -f | --fwd FWD_FASTQ                      Path to the forward FASTQ file (default: None)
   -r | --rev REV_FASTQ                      Path to the reverse FASTQ file (default: None)
   -m | --merged MERGED_FASTQ                Path to merged FASTQ file (default: None)
-  -b | --binsize BINSIZE                    Bin size for analysis (default: BINSIZE = 1000)
-  -u | --RMUS-threshold THRESHHOLD          RMUS threshold for analysis (default: THRESHHOLD = 0.15)
+  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 50)
+  -n | --top-n N                            Number of top references to generate alignment plots for (default: 25)
   -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
   -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy (default: HIERARCHY = species)
   -c | --force                              Force overwrite of existing output files (default: false)
+  -k | --skip-mapping                       Skip mapping and coverage steps; reuse existing PAF and coverage files (implies --force)
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
 
 Example:
-  ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/
+  ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db
   ECMSD --create-db --db-folder /path/to/db_folder
   ECMSD -f reads_R1.fastq -o results/ --db-folder /path/to/db_folder
 EOF
@@ -52,14 +53,14 @@ EOF
 fwd=""
 rev=""
 merged=""
-binsize=1000
-rmus_threshold=0.15
+cov_threshold=50
+top_n=25
 quality=20
 threads=10
-force=false
-version="1.1.0"
+force="no"
+skip_mapping="no"
+version="1.2.0"
 taxonomic_hierarchy="species"
-# skip_environment=false
 output=""
 prefix=""
 db_folder=""
@@ -82,12 +83,12 @@ while [[ $# -gt 0 ]]; do
         merged="$2"
         shift 2
         ;;
-    -b | --binsize)
-        binsize="$2"
+    -u | --cov-threshold)
+        cov_threshold="$2"
         shift 2
         ;;
-    -u | --RMUS-threshold)
-        rmus_threshold="$2"
+    -n | --top-n)
+        top_n="$2"
         shift 2
         ;;
     -q | --mapping_quality)
@@ -99,10 +100,15 @@ while [[ $# -gt 0 ]]; do
         shift 2
         ;;
     -c | --force)
-        force=true
+        force="yes"
         shift
         ;;
-    -x | --taxonomic-hierarchy)
+    -k | --skip-mapping)
+        skip_mapping="yes"
+        force="yes"
+        shift
+        ;;
+    -x | --taxonomic-hierarchy | --taxonomic_hierarchy)
         taxonomic_hierarchy="$2"
         shift 2
         ;;
@@ -175,15 +181,13 @@ if [[ "${create_db}" == true ]]; then
     bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
 
     echo "Database created successfully in ${db_folder}."
-    exit 0 
+    exit 0
 fi
 
 ###############################################################################
 #                        Check Database Folder                               #
 ###############################################################################
 if [[ -n "${db_folder}" ]]; then
-    # Convert db_folder to an absolute path (works even if it doesn't yet exist)
-
     echo "Using database folder: ${db_folder}"
 
     if [[ ! -f "${db_folder}/NCBI_taxdump/nodes.dmp" || \
@@ -200,16 +204,6 @@ else
     echo "No database folder provided. Please provide a database folder using --db-folder or create a new database using --create-db."
     usage
     exit 1
-    # DEFAULT_DB="${WD}/data/refseq_mito"
-    # REF="${DEFAULT_DB}/mitochondrion_refseq_taxid_masked.fna.gz"
-    # NODES="${DEFAULT_DB}/NCBI_taxdump/nodes.dmp"
-    # NAMES="${DEFAULT_DB}/NCBI_taxdump/names.dmp"
-
-    # if [[ ! -f "${REF}" || ! -f "${NODES}" || ! -f "${NAMES}" ]]; then
-    #     echo "Default database files are missing. Generating database..."
-    #     mkdir -p "${DEFAULT_DB}"
-    #     bash "${SHELL_DIR}/MakeRef.sh" "${DEFAULT_DB}" "${threads}"
-    # fi
 fi
 
 ###############################################################################
@@ -224,7 +218,7 @@ fi
 ###############################################################################
 #                            Check Input Files                                #
 ###############################################################################
-[[ ! -f "${fwd}" ]] && {
+[[ -n "${fwd}" && ! -f "${fwd}" ]] && {
     echo "Error: Forward FASTQ file '${fwd}' does not exist."
     exit 1
 }
@@ -258,7 +252,10 @@ Output="${output%/}"
     exit 1
 }
 
-if [[ "${force}" == true && -d "${Output}" ]]; then
+if [[ "${skip_mapping}" == "yes" && -d "${Output}" ]]; then
+    echo "Skipping mapping — reusing existing PAF in: ${Output}/mapping"
+    rm -rf "${Output}/logs"
+elif [[ "${force}" == "yes" && -d "${Output}" ]]; then
     echo "Removing existing output directory: ${Output}"
     rm -rf "${Output}"
 elif [[ -d "${Output}" ]]; then
@@ -278,13 +275,12 @@ fi
 ###############################################################################
 echo "Creating output directories..."
 mkdir -p "${Output}/mapping"
-mkdir "${Output}/logs"
+mkdir -p "${Output}/logs"
 
 ###############################################################################
 #                        Mapping Function                                     #
 ###############################################################################
 run_mapping() {
-    # Function to run minimap2 mapping and log the progress in a log file
     # Accepts one or more read file paths as arguments
     echo "Running minimap2 mapping for: $*"
     minimap2 \
@@ -294,7 +290,6 @@ run_mapping() {
         2> "${Output}/logs/minimap2.log" |
         awk -v Q="${quality}" '$12 >= Q {print}'
 
-    # print log file content
     echo "Minimap2 log:"
     cat "${Output}/logs/minimap2.log"
 }
@@ -305,85 +300,166 @@ run_mapping() {
 echo "Starting mapping step..."
 
 PAF="${Output}/mapping/Mito.paf"
-
 if [[ -n "${prefix}" ]]; then
     PAF="${Output}/mapping/${prefix}_Mito.paf"
 fi
 
-# check if fwd is provided
-if [[ -n "${fwd}" ]]; then
-    if [[ -z "${rev}" || "${rev}" == "no" ]]; then
-        echo "Running single-end mapping..."
-        run_mapping "${fwd}" | gzip >"${PAF}.gz"
-    else
-        echo "Running paired-end mapping..."
-        run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
-    fi
-fi
-
-###############################################################################
-#                        Mapping on Merged Reads                              #
-###############################################################################
-if [[ -n "${merged}" && "${merged}" != "no" ]]; then
-    if [[ ! -f "${merged}" ]]; then
-        echo "Error: Merged reads file '${merged}' does not exist."
+if [[ "${skip_mapping}" == "yes" ]]; then
+    echo "Skipping mapping step — using existing ${PAF}.gz"
+    if [[ ! -f "${PAF}.gz" ]]; then
+        echo "Error: Expected PAF file '${PAF}.gz' not found. Cannot skip mapping."
         exit 1
     fi
-    echo "Running mapping on merged reads..."
-    run_mapping "${merged}" | gzip >>"${PAF}.gz"
+else
+    if [[ -n "${fwd}" ]]; then
+        if [[ -z "${rev}" || "${rev}" == "no" ]]; then
+            echo "Running single-end mapping..."
+            run_mapping "${fwd}" | gzip >"${PAF}.gz"
+        else
+            echo "Running paired-end mapping..."
+            run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
+        fi
+    fi
+
+    if [[ -n "${merged}" && "${merged}" != "no" ]]; then
+        if [[ ! -f "${merged}" ]]; then
+            echo "Error: Merged reads file '${merged}' does not exist."
+            exit 1
+        fi
+        echo "Running mapping on merged reads..."
+        run_mapping "${merged}" | gzip >>"${PAF}.gz"
+    fi
 fi
 
-###############################################################################
-#                        Parse PAF and Calculate RMUS                         #
-###############################################################################
-
-#check if PAF file is created
 if [[ ! -f "${PAF}.gz" ]]; then
     echo "Error: PAF file '${PAF}.gz' was not created."
     exit 1
 fi
 
-echo "Parsing PAF and calculating RMUS/taxonomic proportions..."
+###############################################################################
+#                        Coverage Calculation                                 #
+###############################################################################
+COVERAGE_OUT="${Output}/mapping/Mito_coverage.txt"
+if [[ -n "${prefix}" ]]; then
+    COVERAGE_OUT="${Output}/mapping/${prefix}_Mito_coverage.txt"
+fi
 
+if [[ "${skip_mapping}" == "yes" && -f "${COVERAGE_OUT}" ]]; then
+    echo "Skipping coverage calculation — reusing existing ${COVERAGE_OUT}"
+else
+    echo "Calculating per-reference coverage..."
+    python3 - <<'PYEOF' "${PAF}.gz" "${COVERAGE_OUT}" "${quality}"
+import sys
+import gzip
+import math
+from collections import defaultdict
+
+paf_file = sys.argv[1]
+out_file = sys.argv[2]
+min_mapq = int(sys.argv[3])
+
+diff_arrays = defaultdict(lambda: defaultdict(int))
+ref_lengths = {}
+seen_read_ref = set()
+
+opener = gzip.open if paf_file.endswith(".gz") else open
+
+with opener(paf_file, "rt") as fh:
+    for line in fh:
+        parts = line.strip().split("\t")
+        if len(parts) < 12:
+            continue
+        read_name = parts[0]
+        ref_name  = parts[5]
+        ref_len   = int(parts[6])
+        ref_start = int(parts[7])
+        ref_end   = int(parts[8])
+        mapq      = int(parts[11])
+        ref_lengths[ref_name] = ref_len
+
+        if mapq < min_mapq:
+            continue
+
+        key = (read_name, ref_name)
+        if key in seen_read_ref:
+            continue
+        seen_read_ref.add(key)
+
+        diff_arrays[ref_name][ref_start] += 1
+        diff_arrays[ref_name][ref_end]   -= 1
+
+with open(out_file, "w") as out:
+    out.write("reference\tref_length\tmean_coverage\tstd_coverage\tpct_covered\n")
+    for ref_name, ref_len in sorted(ref_lengths.items()):
+        diff  = diff_arrays[ref_name]
+        depth = 0
+        covered = 0
+        sum_d   = 0
+        sum_sq_d = 0
+        for pos in range(ref_len):
+            depth    += diff.get(pos, 0)
+            sum_d    += depth
+            sum_sq_d += depth * depth
+            if depth > 0:
+                covered += 1
+        mean_cov    = sum_d / ref_len if ref_len > 0 else 0
+        variance    = (sum_sq_d / ref_len - mean_cov ** 2) if ref_len > 0 else 0
+        std_cov     = math.sqrt(max(variance, 0.0))
+        pct_covered = (covered / ref_len * 100) if ref_len > 0 else 0
+        out.write(f"{ref_name}\t{ref_len}\t{mean_cov:.2f}\t{std_cov:.2f}\t{pct_covered:.2f}\n")
+
+print(f"Coverage statistics written to: {out_file}")
+PYEOF
+fi
+
+###############################################################################
+#                        Parse PAF and Assign Taxonomy                        #
+###############################################################################
 output_base="${Output}/mapping/Mito_summary"
-# if prefix is provided, modify output file name
 if [[ -n "${prefix}" ]]; then
     output_base="${Output}/mapping/${prefix}_Mito_summary"
 fi
 
-###############################################################################
-#                        Update Script References                             #
-###############################################################################
+echo "Parsing PAF and assigning taxonomy..."
 python "${SCRIPT_DIR}/LinkTaxonomy.py" \
     --Nodes "${NODES}" \
     --Names "${NAMES}" \
     --PAF "${PAF}.gz" \
-    --Bins "${binsize}" \
-    --RMUS "${rmus_threshold}" \
+    --Coverage "${COVERAGE_OUT}" \
+    --CovThreshold "${cov_threshold}" \
+    --TaxonomicHierarchy "${taxonomic_hierarchy}" \
+    --MapQuality "${quality}" \
     --output "${output_base}"
 
 ###############################################################################
 #                        Plotting Results                                     #
 ###############################################################################
-
 summary_file="${output_base}.txt"
 
 if [[ ! -f "${summary_file}" ]]; then
-    echo "Error:Mito summary file '${summary_file}' was not created."
+    echo "Error: Mito summary file '${summary_file}' was not created."
     exit 1
 fi
 
-#check if summary file has more than one line (header + at least one data line)
 if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
     echo "Error: Mito summary file '${summary_file}' is empty or has no data."
     exit 1
 fi
 
 echo "Plotting results..."
-Rscript "${SCRIPT_DIR}/process_files.R" "${summary_file}" "${Output}" "${taxonomic_hierarchy}" "${prefix}"
+Rscript "${SCRIPT_DIR}/process_files.R" "${Output}" "${taxonomic_hierarchy}" "${prefix}"
+
+###############################################################################
+#                        PAF Alignment Coverage Plots                         #
+###############################################################################
+echo "Generating per-reference PAF alignment plots (top ${top_n} references)..."
+Rscript "${SCRIPT_DIR}/plot_paf_alignments.R" \
+    "${Output}" \
+    "${PAF}.gz" \
+    "${output_base}.ref_summary.txt" \
+    "${top_n}"
 
 ###############################################################################
 #                        Pipeline Completed                                   #
 ###############################################################################
 echo "ECMSD pipeline completed successfully."
-    

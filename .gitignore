@@ -3,5 +3,7 @@ TestOutput/
 #shell/kraken2.sh
 #shell/trim.sh
 scripts/conda_env
-.DS_Store
+scripts/LinkTaxonomy_old.py
+scripts/logs/
 shell/ECMSD_old.sh
+.DS_Store

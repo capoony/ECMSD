@@ -2,7 +2,7 @@
 
 ## Overview
 
-ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinformatics pipeline designed for the detection and taxonomic classification of mitochondrial sequences from high-throughput sequencing data. The pipeline uses minimap2 for fast sequence alignment against a comprehensive mitochondrial reference database and provides quantitative analysis through Read Mapping Uniformity Score (RMUS) calculations.
+ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinformatics pipeline designed for the detection and taxonomic classification of mitochondrial sequences from high-throughput sequencing data. The pipeline uses minimap2 for fast sequence alignment against a comprehensive mitochondrial reference database, filters references by breadth of coverage, and provides quantitative summaries and visualisation plots.
 
 ## Features
 
@@ -10,7 +10,7 @@ ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinforma
 - **Comprehensive reference database** built from NCBI RefSeq mitochondrial genomes
 - **Taxonomic classification** with customizable hierarchy levels
 - **Quality-based filtering** with configurable mapping quality thresholds
-- **RMUS (Read Mapping Uniformity Score)** calculation for quantitative analysis
+- **Coverage-based reference filtering**: only references with sufficient breadth of coverage are retained
 - **Automated visualization** of results with R-based plotting
 - **Support for multiple input formats**: single-end, paired-end, and merged reads
 - **Decoupled database management**: the reference database is built once and shared across runs
@@ -33,9 +33,9 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 
 1. **Sequence Mapping**: Aligns input reads to the mitochondrial reference using minimap2
 2. **Quality Filtering**: Filters alignments based on mapping quality threshold
-3. **Taxonomic Assignment**: Links aligned sequences to taxonomic information using NCBI taxonomy
-4. **RMUS Calculation**: Computes Read Mapping Uniformity Score for quantitative assessment
-5. **Visualization**: Generates plots and summary statistics
+3. **Coverage Calculation**: Computes per-reference breadth of coverage; references below the threshold are discarded
+4. **Taxonomic Assignment**: Links aligned sequences to taxonomic information using NCBI taxonomy
+5. **Visualization**: Generates summary plots and per-reference alignment coverage plots
 
 ## Requirements
 
@@ -47,7 +47,7 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 
 - minimap2
 - BBTools (bbmask)
-- Python 3 with numpy
+- Python 3
 - R with tidyverse
 - pigz
 - wget
@@ -141,8 +141,8 @@ ECMSD --fwd /path/to/TestData/merged.fastq.gz \
       --out TestOutput \
       --db-folder /path/to/db_folder \
       --threads 20 \
-      --binsize 1000 \
-      --RMUS-threshold 0.15 \
+      --cov-threshold 10 \
+      --top-n 25 \
       --mapping_quality 20 \
       --taxonomic-hierarchy genus \
       --force
@@ -204,11 +204,12 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_direct
 #### Optional Arguments
 
 - `-r, --rev`: Path to the reverse FASTQ file (for paired-end data; requires `--fwd`)
-- `-b, --binsize`: Bin size for RMUS analysis (default: 1000)
-- `-u, --RMUS-threshold`: RMUS threshold for analysis (default: 0.15)
+- `-u, --cov-threshold`: Minimum percentage of a reference covered by reads to retain it (default: 50)
+- `-n, --top-n`: Number of top references to generate per-reference alignment plots for (default: 25)
 - `-q, --mapping_quality`: Mapping quality threshold (default: 20)
 - `-t, --threads`: Number of threads to use (default: 10)
 - `-c, --force`: Force overwrite of existing output files
+- `-k, --skip-mapping`: Skip mapping and coverage steps; reuse existing PAF and coverage files (implies `--force`)
 - `-x, --taxonomic-hierarchy`: Taxonomic hierarchy level (default: species)
 - `-p, --prefix`: Prefix for output files (default: None)
 - `-v, --version`: Show version and exit
@@ -219,7 +220,7 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_direct
 ```bash
 # High-stringency analysis with custom thresholds
 ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db \
-  -q 30 -u 0.25 -b 500 -t 16
+  -q 30 -u 75 -n 50 -t 16
 
 # Genus-level taxonomic classification
 ECMSD -f reads.fastq -o results/ -d /path/to/db -x genus
@@ -253,10 +254,13 @@ The pipeline generates the following output structure:
 output_directory/
 ├── mapping/
 │   ├── Mito.paf.gz                              # Compressed alignment results
-│   ├── Mito_summary.txt                         # Taxonomic summary with RMUS scores
-│   ├── Mito_summary_<taxon>.txt                 # Per-taxon summary
+│   ├── Mito_coverage.txt                        # Per-reference coverage statistics
+│   ├── Mito_summary.txt                         # Taxonomic assignment per read
+│   ├── Mito_summary.ref_summary.txt             # Ranked reference summary for plotting
+│   ├── Mito_summary_<taxon>.txt                 # Per-taxon read count summary
 │   ├── Mito_summary_<taxon>_ReadLengths.png     # Read length distribution plot
-│   └── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot
+│   ├── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot
+│   └── alignment_plots/                         # Per-reference coverage and depth plots
 └── logs/
     └── minimap2.log                             # Mapping log
 ```
@@ -264,43 +268,32 @@ output_directory/
 ### Output File Descriptions
 
 - **Mito.paf.gz**: Compressed PAF format alignment file containing all mitochondrial sequence alignments
-- **Mito_summary.txt**: Tab-separated file with taxonomic assignments, read counts, and RMUS scores
+- **Mito_coverage.txt**: Per-reference coverage statistics — columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
+- **Mito_summary.txt**: Tab-separated file with taxonomic assignments and read counts per read
+- **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `read_count`
 - **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
 - **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
 - **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
+- **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references
 - **minimap2.log**: Detailed minimap2 alignment log
 
 ## Parameters Explanation
 
-### RMUS (Read Mapping Uniformity Score)
+### Coverage-based Reference Filtering (`--cov-threshold`)
 
-RMUS is a novel metric based on [Shannon's entropy](https://arxiv.org/pdf/1405.2061) that assesses the uniformity of read distribution across genomes. Higher RMUS values indicate more uniform coverage, which can help distinguish authentic mitochondrial content from mapping artifacts, contamination or overall low-quality alignments.
+After mapping, ECMSD calculates per-reference breadth of coverage from the PAF file. For each reference, it computes the percentage of reference positions covered by at least one read (`pct_covered`). Only references where `pct_covered ≥ --cov-threshold` are passed to the taxonomic assignment step.
 
-RMUS is calculated as follows:
+This replaces the previous RMUS-based filtering. Coverage breadth is a more direct and interpretable measure for distinguishing authentic mitochondrial hits (which should show broad, even coverage across the genome) from mapping artifacts or NUMTs (which tend to pile up on a small region of the reference).
 
-```math
-RMUS = \frac{H}{H_{max}}
-```
+The `Mito_coverage.txt` output file contains the full per-reference statistics for inspection.
 
-where:
+### `--top-n`
 
-- \( H \) is the Shannon entropy of the read distribution across taxonomic categories
+Controls how many of the top-ranked references (by read count) receive a detailed per-reference alignment plot. Plots are written to `mapping/alignment_plots/` and show coverage breadth and sequencing depth across the reference. Increase this value to inspect more candidate references.
 
-```math
-H = -\sum_{i=1}^{n} p_i \log_2(p_i)
-```
+### `--skip-mapping`
 
-- \( p_i \) is the proportion of reads assigned to category \( i \)
-- \( n \) is the total number of categories
-
-- \( H_{max} \) is the maximum possible entropy for the given number of categories
-- If \( H_{max} \) is zero, RMUS is set to zero to avoid division by zero errors.
-
-RMUS values range from 0 to 1, where 1 indicates perfect uniformity of reads across all categories (i.e. genomic bins). This metric is particularly useful for assessing if the mapping of reads is an artifact (mapping only to a single specific region), as it provides a quantitative measure of how evenly reads are distributed across the reference genomes. We assume that only a high RMUS value indicates that the original reads are likely from a specific mitochondrial genome, while low RMUS values may suggest mapping artifacts or numts. It helps in identifying potential contamination or uneven coverage that may affect downstream analyses. RMUS is calculated for each taxonomic category during the taxonomic assignment step and is included in the output summary file for easy interpretation.
-
-### Bin Size
-
-The bin size parameter determines the resolution for RMUS calculation. Smaller bins provide higher resolution but may be more sensitive to sequencing artifacts.
+Skips the minimap2 mapping and coverage calculation steps and reuses the existing `Mito.paf.gz` and `Mito_coverage.txt` files. Only the log directory is cleared. Useful when iterating over different `--cov-threshold`, `--taxonomic-hierarchy`, or `--top-n` values without re-running the (slow) mapping step.
 
 ### Mapping Quality
 
@@ -338,7 +331,8 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 ### Performance Optimization
 
 - Use more threads (`-t`) on systems with multiple CPU cores
-- Adjust bin size (`-b`) based on your data characteristics
+- Use `--skip-mapping` (`-k`) to re-run analysis with different thresholds without repeating the mapping step
+- Adjust `--cov-threshold` (`-u`) to control how strictly references are filtered by breadth of coverage
 - Consider mapping quality threshold (`-q`) based on your sequencing platform
 - Build the database on fast local storage to reduce I/O latency during mapping
 
@@ -363,6 +357,7 @@ For questions, issues, or feature requests, please open a GitHub issue.
 
 ## Version History
 
+- **v1.2.0**: Replaced RMUS-based filtering with coverage-based reference filtering (`--cov-threshold`). Added per-reference alignment plots (`--top-n`), `--skip-mapping` flag for faster iteration, and `plot_paf_alignments.R` for visualising coverage breadth and sequencing depth.
 - **v1.1.0**: Decoupled database creation from analysis runs. The database is now built once with `--create-db --db-folder` and provided as a required parameter to all analysis runs. This prevents race conditions in parallel workflows and enables pipeline-level database management (e.g. [pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)). Added `install.sh` for explicit dependency installation.
 - **v1.0.0**: Initial release with core mitochondrial detection functionality
 

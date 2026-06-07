@@ -1,6 +1,5 @@
-import numpy as np
+import functools
 from collections import defaultdict as d
-import math
 import sys
 from optparse import OptionParser, OptionGroup
 
@@ -15,13 +14,19 @@ group = OptionGroup(parser, '< put description here >')
 
 parser.add_option("--Nodes", dest="Tax", help="NCBI node dmp file")
 parser.add_option("--Names", dest="Names", help="NCBI names dmp file")
-parser.add_option("--Bins", dest="bins",
-                  help="bin size for RMUS calculation (default: 1000)", default=1000)
-parser.add_option("--RMUS", dest="RMUS",
-                  help="minimum Read Mapping Uniformity Score (default: 0.5)", default=0.5)
+parser.add_option("--Coverage", dest="Coverage",
+                  help="Coverage file produced by the coverage calculation step (TSV with columns: reference, ref_length, mean_coverage, std_coverage, pct_covered)")
+parser.add_option("--CovThreshold", dest="CovThreshold",
+                  help="Minimum percentage of reference covered by reads (0-100) to retain a reference (default: 50)", default=50)
 parser.add_option("--PAF", dest="PAF",
                   help="PAF output file with SeqID in column1 and TaxID in column2")
 parser.add_option("--output", dest="OUT", help="Output file")
+parser.add_option("--TaxonomicHierarchy", dest="TaxonomicHierarchy",
+                  help="Taxonomic rank to use as the label in the ref_summary (e.g. species, genus, family). Default: species",
+                  default="species")
+parser.add_option("--MapQuality", dest="MapQuality",
+                  help="Minimum mapping quality for primary alignments (default: 20)",
+                  default=20, type="int")
 
 (options, args) = parser.parse_args()
 parser.add_option_group(group)
@@ -31,7 +36,7 @@ rank_dict = {}
 names = {}
 
 def load_data(x):
-    ''' import data either from a gzipped or or uncrompessed file or from STDIN'''
+    ''' import data either from a gzipped or uncompressed file or from STDIN'''
     import gzip
     if x == "-":
         y = sys.stdin
@@ -42,6 +47,7 @@ def load_data(x):
     return y
 
 
+@functools.lru_cache(maxsize=None)
 def taxon_trace(node):
     """Trace the taxonomic path from a node to the root."""
     rank = []
@@ -61,85 +67,43 @@ def taxon_trace(node):
     return "|".join(reversed(rank)), "|".join(reversed(name_path))
 
 
-def calculate_rmus_from_paf(paf_file, bin_size, OUT):
+def load_coverage(coverage_file, threshold):
     """
-    Calculates the Read Mapping Uniformity Score (RMUS) from a PAF file.
+    Loads the coverage file and returns a set of taxIDs whose percentage of
+    covered reference positions meets or exceeds the given threshold.
 
-    Parameters:
-        paf_file (str): Path to the PAF file.
-        ref_length (int): Length of the reference sequence.
-        bin_size (int): Size of each bin (default: 1000 bp).
-        ref_name (str): (Optional) Reference name to filter for a specific target.
-
-    Returns:
-        float: RMUS value between 0 and 1.
+    The coverage file is expected to have columns:
+        reference  ref_length  mean_coverage  std_coverage  pct_covered
+    The taxID is extracted from the reference name as reference.split('|')[1].
+    Threshold is a percentage value (0-100).
     """
-
-    ref_dict = d(int)
-    bin_dict = d(lambda: d(int))
-
-    with load_data(paf_file) as f:
-        for line in f:
-            fields = line.strip().split('\t')
-            if len(fields) < 12:
-                continue  # Not a valid PAF line
-            target = fields[5].split("|")[1]  # Extract the target sequence ID
-            target_start = int(fields[7])
-            target_end = int(fields[8])
-            ref_length = int(fields[6])
-            ref_dict[target] = int(fields[6])
-            # make partially over
-            num_bins = math.ceil(ref_length / bin_size)
-            start_bin = target_start // bin_size
-            end_bin = min(num_bins, (target_end // bin_size) + 1)
-            for b in range(start_bin, end_bin):
-                bin_dict[target][b] += 1
-
-    RMUS = d(float)
-    OUT.write("Name\tTaxID\tTotalReads\tRMUS\tBins\n")
-    printlist = d(list)
-    for k in ref_dict.keys():
-        ref_length = ref_dict[k]
-        total_reads = sum(bin_dict[k].values())
-
-        # Convert to probabilities
-        probs = [x/total_reads for x in bin_dict[k].values()]
-
-        # Calculate entropy
-        entropy = sum([x * math.log2(x) for x in probs if x > 0])
-
-        # Normalize by maximum possible entropy
-        max_entropy = math.log2(len(probs))
-        rmus = entropy / max_entropy if max_entropy > 0 else -0.0
-        RMUS[k] = rmus*-1
-        if k in names:
-            NAME = "_".join(names[k].split())
-        else:
-            NAME = "Unknown"
-        printlist[total_reads].append([NAME, k, total_reads, rmus*-1, ' | '.join(
-            [str(x) for x in [str(bin_size*y)+':'+str(z) for y, z in bin_dict[k].items()]])])
-
-    # Sort the printlist by total_reads in descending order
-    sorted_reads = sorted(printlist.keys(), reverse=True)
-    for reads in sorted_reads:
-        for entry in printlist[reads]:
-            OUT.write("\t".join([str(x) for x in entry]) + "\n")
-    OUT.close()
-    return RMUS
+    passing = set()
+    with open(coverage_file, "r") as fh:
+        next(fh)  # skip header
+        for line in fh:
+            parts = line.strip().split("\t")
+            if len(parts) < 5:
+                continue
+            ref_name = parts[0]
+            try:
+                pct_covered = float(parts[4])
+            except ValueError:
+                continue
+            if pct_covered >= threshold:
+                taxid = ref_name.split("|")[1]
+                passing.add(taxid)
+    return passing
 
 
 def main():
 
-    #check if all required options are provided
-    if not options.Tax or not options.Names or not options.PAF or not options.OUT:
+    if not options.Tax or not options.Names or not options.PAF or not options.OUT or not options.Coverage:
         parser.print_help()
-        sys.exit(1) 
+        sys.exit(1)
 
     print("Loading taxonomy data from nodes.dmp and names.dmp ...")
     with load_data(options.Tax) as node:
-
         for line in node:
-            # Split the line by tab and remove leading/trailing whitespace
             its = [x.replace("\t", "") for x in line.rstrip().split("|")]
             parents[its[0]] = its[1]
             rank_dict[its[0]] = its[2]
@@ -151,48 +115,94 @@ def main():
             if "scientific name" in line:
                 names[its[0]] = its[1]
 
-    print("Calculating RMUS from PAF file ...")
-    RMUS = calculate_rmus_from_paf(
-        options.PAF, 
-        int(options.bins), 
-        open(options.OUT+".RMUS.txt", 'wt'))
+# Load taxonomy first (populates parents, rank_dict, names module-level dicts)
+main()
 
-    with load_data(options.PAF) as PAF, open(options.OUT+".txt", 'wt') as export:
-        # write header to output file
-        export.write(
-            "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\n")
-        for line in PAF:
-            lines = line.rstrip().split("\t")
-            if len(lines) < 2:
+passing_taxids = load_coverage(options.Coverage, float(options.CovThreshold))
+print(
+    f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
+
+
+def get_alignment_score(fields):
+    """Return the best available alignment score from PAF optional fields."""
+    for f in fields[12:]:
+        if f.startswith("ms:i:"):
+            return int(f[5:])
+    return 0
+
+
+def load_best_hits(paf_path, min_mapq):
+    """Single-pass: keep every primary alignment that passes MQ.
+    Returns a dict: read_name -> list of PAF fields for that read.
+    """
+    winners = d(list)
+    with load_data(paf_path) as fh:
+        for line in fh:
+            fields = line.rstrip().split("\t")
+            if len(fields) < 12:
                 continue
-            sequence_id = lines[0]
-            tax_id = lines[5].split("|")[1]
-            refLen = lines[6]
-            refStart = lines[7]
-            refEnd = lines[8]
-
-            if RMUS[tax_id] < float(options.RMUS):
+            read_name = fields[0]
+            mapq = int(fields[11])
+            if mapq < min_mapq:
                 continue
+            winners[read_name].append(fields)
 
-            if tax_id not in names:
-                continue
-
-            node_path, name_path = taxon_trace(tax_id)
-            # loop through the following ranks "no rank|cellular root|domain|kingdom|phylum|class|order|family|genus|species" and make new list from name path. replace with NA if not available
-            rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
-            name_path = []
-            for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
-                if rank in rank_name:
-                    name_path.append(rank_name[rank])
-                else:
-                    name_path.append("NA")
-
-            Tax = "\t".join(["_".join(x.split()) for x in name_path])
-            export.write(sequence_id+"\t"+tax_id+"\t" +
-                        lines[1]+"\t"+lines[11] + "\t"+Tax+"\n")
+    print(f"PAF loaded: {len(winners)} reads passed MQ filter.")
+    return winners
 
 
-    sys.exit()
+print("Loading PAF alignments...")
+best_hits = load_best_hits(options.PAF, options.MapQuality)
 
-if __name__ == "__main__":
-    main()
+# Count reads per reference (ref_name, taxId) for ranking
+ref_read_counts = d(int)
+ref_to_taxid = {}
+ref_to_name = {}
+ref_to_species = {}
+
+with open(options.OUT+".txt", 'wt') as export:
+    export.write(
+        "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\n")
+    for seqId, hit_list in best_hits.items():
+        lines = hit_list[0]
+        ref_name = lines[5]
+        taxId = ref_name.split("|")[1]
+
+        if taxId not in passing_taxids:
+            continue
+
+        if taxId not in names:
+            continue
+
+        node_path, name_path = taxon_trace(taxId)
+        rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
+        name_path = []
+        for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
+            if rank in rank_name:
+                name_path.append(rank_name[rank])
+            else:
+                name_path.append("NA")
+
+        Tax = "\t".join(["_".join(x.split()) for x in name_path])
+        export.write(seqId + "\t" + taxId + "\t" +
+                     lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
+
+        ref_read_counts[ref_name] += 1
+        ref_to_taxid[ref_name] = taxId
+        rank_index = {"domain": 0, "kingdom": 1, "phylum": 2, "class": 3,
+                      "order": 4, "family": 5, "genus": 6, "species": 7}
+        chosen_rank = options.TaxonomicHierarchy.lower()
+        idx = rank_index.get(chosen_rank, 7)
+        label = name_path[idx] if name_path[idx] != "NA" else "Unknown"
+        ref_to_name[ref_name] = "_".join(label.split())
+        species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
+        ref_to_species[ref_name] = "_".join(species_label.split())
+
+# Write ranked reference summary for plotting
+with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
+    ref_out.write("ref_name\ttaxid\ttaxon_name\tspecies_name\tread_count\n")
+    for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
+        ref_out.write(
+            f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{count}\n")
+
+print(f"Reference summary written to: {options.OUT}.ref_summary.txt")
