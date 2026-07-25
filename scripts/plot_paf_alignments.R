@@ -163,7 +163,8 @@ for (i in seq_len(nrow(top_refs))) {
           axis.ticks.y = element_blank()
         )
 
-      # --- Panel 2: sequencing depth ---
+      # --- Panel 2: sequencing depth (log scale so low-depth regions
+      # remain visible next to high peaks; log1p handles depth == 0) ---
       depth_df <- compute_depth(paf_sub)
       p_depth <- ggplot(depth_df, aes(x = pos, y = depth)) +
         geom_area(fill = "black", alpha = 0.7) +
@@ -171,7 +172,8 @@ for (i in seq_len(nrow(top_refs))) {
           limits = c(0, ref_len_val),
           labels = function(x) paste0(round(x / 1e3, 1), " kb")
         ) +
-        labs(x = "Reference position (bp)", y = "Depth (×)") +
+        scale_y_continuous(trans = "log1p") +
+        labs(x = "Reference position (bp)", y = "Depth (×, log scale)") +
         theme_bw(base_size = 20)
 
       png(png_path, width = 1800, height = 1050, res = 150)
