@@ -151,6 +151,10 @@ for (i in seq_len(nrow(top_refs))) {
     {
       ref_len_val <- max(paf_sub$tlen)
 
+      # Per-position depth (also used below to compute breadth-of-coverage %)
+      depth_df <- compute_depth(paf_sub)
+      coverage_pct <- 100 * sum(depth_df$depth > 0) / ref_len_val
+
       # --- Panel 1: alignment coverage (breadth) — rectangle per alignment ---
       p_cov <- ggplot(paf_sub) +
         geom_rect(aes(xmin = tstart, xmax = tend, ymin = 0, ymax = 1),
@@ -163,8 +167,8 @@ for (i in seq_len(nrow(top_refs))) {
         labs(
           title = sprintf("%s  [taxID: %s]", gsub("_", " ", species_name), taxid),
           subtitle = sprintf(
-            "Rank %d  |  %d mapped reads",
-            i, read_count
+            "Rank %d  |  %d mapped reads  |  %.1f%% coverage",
+            i, read_count, coverage_pct
           ),
           x = "Reference position (bp)", y = "Coverage"
         ) +
@@ -178,7 +182,6 @@ for (i in seq_len(nrow(top_refs))) {
 
       # --- Panel 2: sequencing depth (log scale so low-depth regions
       # remain visible next to high peaks; log1p handles depth == 0) ---
-      depth_df <- compute_depth(paf_sub)
       p_depth <- ggplot(depth_df, aes(x = pos, y = depth)) +
         geom_area(fill = "black", alpha = 0.7) +
         scale_x_continuous(
