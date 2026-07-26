@@ -30,7 +30,8 @@ dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
 # ---------------------------------------------------------------------------
 ref_tbl <- read.table(ref_summary,
   header = TRUE, sep = "\t",
-  stringsAsFactors = FALSE, quote = ""
+  stringsAsFactors = FALSE, quote = "",
+  colClasses = c(ref_name = "character")
 )
 ref_tbl <- ref_tbl[!is.na(ref_tbl$taxon_name) & ref_tbl$taxon_name != "NA", ]
 
