@@ -51,7 +51,7 @@ if not os.path.isfile(options.TX):
 
 # Create a dictionary to map names to taxids
 # The dictionary will be used to rename the FASTA headers
-# to include the taxid in the format: >kraken:taxid|<taxid>
+# to include the taxid in the format: ><taxid>
 # The taxid will be used to filter the sequences based on the taxid
 TaxidDict = d(str)
 for l in load_data(options.TX):
@@ -82,7 +82,7 @@ with load_data(options.IN) as f, open(options.OUT, "wt") as o:
                 # If the taxid is not in IDlist, add it to IDlist and write the new header
                 SKIP = False
                 IDlist[TaxidDict[name]] = True
-                o.write(f">kraken:taxid|{TaxidDict[name]}\n")
+                o.write(f">{TaxidDict[name]}\n")
                 continue
             # If the name is not in TaxidDict or the taxid is already in IDlist, skip the line
             else:

@@ -2,6 +2,19 @@
 
 ---
 
+## Unreleased
+
+### Changed
+
+- **`scripts/renameFASTA_taxid.py`**: FASTA headers are now written as the bare taxid (`>{taxid}`) instead of the legacy `>kraken:taxid|{taxid}` format inherited from the retired Kraken2 workflow (see v1.1.0 removal of `shell/kraken2.sh`)
+- **`scripts/LinkTaxonomy.py`**: reads the reference name directly as the taxid instead of extracting it via `ref_name.split("|")[1]`
+- **`scripts/plot_paf_alignments.R`**: sequencing-depth panel now uses a log1p y-axis scale with power-of-ten breaks, so low-depth regions stay visible next to sharp high-depth peaks instead of flattening out on a linear axis
+- **`scripts/plot_paf_alignments.R`**: alignment-coverage panel subtitle now reports breadth-of-coverage percentage instead of the reference name, for clarity
+
+> NOTE: Existing database folders built with the old header format must be rebuilt (delete `mitochondrion_refseq_taxid.fna*` and re-run `ECMSD --create-db`)
+
+---
+
 ## v1.2.0 — Coverage-based filtering & conda integration (2026-05-20)
 
 ### Added

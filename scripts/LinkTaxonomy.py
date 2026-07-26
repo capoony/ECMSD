@@ -74,7 +74,7 @@ def load_coverage(coverage_file, threshold):
 
     The coverage file is expected to have columns:
         reference  ref_length  mean_coverage  std_coverage  pct_covered
-    The taxID is extracted from the reference name as reference.split('|')[1].
+    The reference name is the taxID itself.
     Threshold is a percentage value (0-100).
     """
     passing = set()
@@ -90,8 +90,7 @@ def load_coverage(coverage_file, threshold):
             except ValueError:
                 continue
             if pct_covered >= threshold:
-                taxid = ref_name.split("|")[1]
-                passing.add(taxid)
+                passing.add(ref_name)
     return passing
 
 
@@ -166,7 +165,7 @@ with open(options.OUT+".txt", 'wt') as export:
     for seqId, hit_list in best_hits.items():
         lines = hit_list[0]
         ref_name = lines[5]
-        taxId = ref_name.split("|")[1]
+        taxId = ref_name
 
         if taxId not in passing_taxids:
             continue
