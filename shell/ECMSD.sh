@@ -29,7 +29,7 @@ ALL ARGUMENTS:
   -f | --fwd FWD_FASTQ                      Path to the forward FASTQ file (default: None)
   -r | --rev REV_FASTQ                      Path to the reverse FASTQ file (default: None)
   -m | --merged MERGED_FASTQ                Path to merged FASTQ file (default: None)
-  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 50)
+  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 25)
   -n | --top-n N                            Number of top references to generate alignment plots for (default: 25)
   -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
   -p | --prefix PREFIX                      Prefix for output files (default: None)
@@ -53,7 +53,7 @@ EOF
 fwd=""
 rev=""
 merged=""
-cov_threshold=50
+cov_threshold=25
 top_n=25
 quality=20
 threads=10
