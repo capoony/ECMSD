@@ -150,8 +150,8 @@ for (i in seq_len(nrow(top_refs))) {
         labs(
           title = sprintf("%s  [taxID: %s]", gsub("_", " ", species_name), taxid),
           subtitle = sprintf(
-            "Rank %d  |  %d mapped reads  |  ref: %s",
-            i, read_count, ref_name
+            "Rank %d  |  %d mapped reads",
+            i, read_count
           ),
           x = "Reference position (bp)", y = "Coverage"
         ) +
