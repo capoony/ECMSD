@@ -80,6 +80,19 @@ cat(sprintf(
 ))
 
 # ---------------------------------------------------------------------------
+# Helper: "nice" breaks for a log1p-scaled depth axis. Default continuous
+# breaks are computed on the untransformed values (e.g. evenly-spaced
+# 0, 1000, 2000, ...), which then bunch up once log1p-compressed. Using
+# powers of ten instead keeps breaks evenly spaced in log space.
+# ---------------------------------------------------------------------------
+log_depth_breaks <- function(max_val) {
+  if (!is.finite(max_val) || max_val <= 0) {
+    return(c(0, 1))
+  }
+  c(0, 10^(0:ceiling(log10(max_val))))
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compute per-position sequencing depth from a pafr data frame
 # Returns a data.frame(pos, depth)
 # ---------------------------------------------------------------------------
@@ -172,7 +185,11 @@ for (i in seq_len(nrow(top_refs))) {
           limits = c(0, ref_len_val),
           labels = function(x) paste0(round(x / 1e3, 1), " kb")
         ) +
-        scale_y_continuous(trans = "log1p") +
+        scale_y_continuous(
+          trans = "log1p",
+          breaks = log_depth_breaks(max(depth_df$depth, na.rm = TRUE)),
+          labels = scales::label_comma()
+        ) +
         labs(x = "Reference position (bp)", y = "Depth (×, log scale)") +
         theme_bw(base_size = 20)
 
