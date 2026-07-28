@@ -34,7 +34,7 @@ ALL ARGUMENTS:
   -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
-  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy (default: HIERARCHY = species)
+  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy: subspecies, species, genus, family, order, class, phylum, kingdom or domain (default: HIERARCHY = species)
   -c | --force                              Force overwrite of existing output files (default: false)
   -k | --skip-mapping                       Skip mapping and coverage steps; reuse existing PAF and coverage files (implies --force)
   -z | --create-db                          Create a new database

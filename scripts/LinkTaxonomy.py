@@ -22,7 +22,7 @@ parser.add_option("--PAF", dest="PAF",
                   help="PAF output file with SeqID in column1 and TaxID in column2")
 parser.add_option("--output", dest="OUT", help="Output file")
 parser.add_option("--TaxonomicHierarchy", dest="TaxonomicHierarchy",
-                  help="Taxonomic rank to use as the label in the ref_summary (e.g. species, genus, family). Default: species",
+                  help="Taxonomic rank to use as the label in the ref_summary (e.g. subspecies, species, genus, family). Default: species. If subspecies is chosen but a reference has no subspecies rank, the species name is used instead",
                   default="species")
 parser.add_option("--MapQuality", dest="MapQuality",
                   help="Minimum mapping quality for primary alignments (default: 20)",
@@ -158,10 +158,11 @@ ref_read_counts = d(int)
 ref_to_taxid = {}
 ref_to_name = {}
 ref_to_species = {}
+ref_to_subspecies = {}
 
 with open(options.OUT+".txt", 'wt') as export:
     export.write(
-        "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\n")
+        "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
     for seqId, hit_list in best_hits.items():
         lines = hit_list[0]
         ref_name = lines[5]
@@ -176,7 +177,7 @@ with open(options.OUT+".txt", 'wt') as export:
         node_path, name_path = taxon_trace(taxId)
         rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
         name_path = []
-        for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species"]:
+        for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species", "subspecies"]:
             if rank in rank_name:
                 name_path.append(rank_name[rank])
             else:
@@ -189,19 +190,29 @@ with open(options.OUT+".txt", 'wt') as export:
         ref_read_counts[ref_name] += 1
         ref_to_taxid[ref_name] = taxId
         rank_index = {"domain": 0, "kingdom": 1, "phylum": 2, "class": 3,
-                      "order": 4, "family": 5, "genus": 6, "species": 7}
+                      "order": 4, "family": 5, "genus": 6, "species": 7,
+                      "subspecies": 8}
         chosen_rank = options.TaxonomicHierarchy.lower()
         idx = rank_index.get(chosen_rank, 7)
-        label = name_path[idx] if name_path[idx] != "NA" else "Unknown"
+        label = name_path[idx]
+        # most references are only resolved to species level; fall back rather
+        # than labelling them all "Unknown"
+        if label == "NA" and chosen_rank == "subspecies":
+            label = name_path[7]
+        if label == "NA":
+            label = "Unknown"
         ref_to_name[ref_name] = "_".join(label.split())
         species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
         ref_to_species[ref_name] = "_".join(species_label.split())
+        subspecies_label = name_path[8] if name_path[8] != "NA" else "NA"
+        ref_to_subspecies[ref_name] = "_".join(subspecies_label.split())
 
 # Write ranked reference summary for plotting
 with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
-    ref_out.write("ref_name\ttaxid\ttaxon_name\tspecies_name\tread_count\n")
+    ref_out.write(
+        "ref_name\ttaxid\ttaxon_name\tspecies_name\tsubspecies_name\tread_count\n")
     for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
         ref_out.write(
-            f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{count}\n")
+            f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{ref_to_subspecies[ref_name]}\t{count}\n")
 
 print(f"Reference summary written to: {options.OUT}.ref_summary.txt")

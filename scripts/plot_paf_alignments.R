@@ -125,6 +125,16 @@ for (i in seq_len(nrow(top_refs))) {
   species_name <- top_refs$species_name[i]
   read_count <- top_refs$read_count[i]
 
+  # Prefer the subspecies name in the title where the reference is resolved that
+  # far; older ref_summary files have no subspecies_name column at all.
+  display_name <- species_name
+  if ("subspecies_name" %in% names(top_refs)) {
+    subsp <- top_refs$subspecies_name[i]
+    if (!is.na(subsp) && nchar(trimws(subsp)) > 0 && subsp != "NA") {
+      display_name <- subsp
+    }
+  }
+
   # O(1) lookup from pre-split list; also drop any rows with NA tname
   paf_sub <- paf_by_tname[[ref_name]]
   if (!is.null(paf_sub)) paf_sub <- paf_sub[!is.na(paf_sub$tname), ]
@@ -166,7 +176,7 @@ for (i in seq_len(nrow(top_refs))) {
           labels = function(x) paste0(round(x / 1e3, 1), " kb")
         ) +
         labs(
-          title = sprintf("%s  [taxID: %s]", gsub("_", " ", species_name), taxid),
+          title = sprintf("%s  [taxID: %s]", gsub("_", " ", display_name), taxid),
           subtitle = sprintf(
             "Rank %d  |  %d mapped reads  |  %.1f%% coverage",
             i, read_count, coverage_pct

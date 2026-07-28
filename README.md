@@ -270,7 +270,7 @@ output_directory/
 - **Mito.paf.gz**: Compressed PAF format alignment file containing all mitochondrial sequence alignments
 - **Mito_coverage.txt**: Per-reference coverage statistics — columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
 - **Mito_summary.txt**: Tab-separated file with taxonomic assignments and read counts per read
-- **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `read_count`
+- **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `subspecies_name`, `read_count` (`subspecies_name` is `NA` for references not resolved below species level)
 - **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
 - **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
 - **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
