@@ -11,6 +11,13 @@ threads=$3
 #eval "$(conda shell.bash hook)"
 #conda activate ${WD}/scripts/conda_env
 
+# The only three files the analysis pipeline reads from the database folder
+# (see ECMSD.sh: REF, NODES, NAMES). Everything else produced below is a build
+# intermediate and is removed by cleanup_intermediates() once the build succeeds.
+REF_FILE="mitochondrion_refseq_taxid_masked.fna.gz"
+NODES_FILE="NCBI_taxdump/nodes.dmp"
+NAMES_FILE="NCBI_taxdump/names.dmp"
+
 echo "*********************"
 echo "Setting up RefSeq mitochondrial genome database... "
 echo "Have a cup of coffee, this may take a while... "
@@ -23,6 +30,11 @@ echo '''
    `----´ '''
 
 echo ""
+
+# Returns success only if all files required by an analysis run are present
+database_complete() {
+    [ -f "${REF_FILE}" ] && [ -f "${NODES_FILE}" ] && [ -f "${NAMES_FILE}" ]
+}
 
 # Function to download mitochondrial genomes
 download_genomes() {
@@ -102,8 +114,10 @@ rename_fasta_headers() {
 }
 
 # Function to mask low-complexity regions
+# Guard checks both the raw and the compressed output, since compress_fasta()
+# replaces the uncompressed file and this step is expensive to repeat.
 mask_low_complexity_regions() {
-    if [ -f "mitochondrion_refseq_taxid_masked.fna" ]; then
+    if [ -f "mitochondrion_refseq_taxid_masked.fna" ] || [ -f "${REF_FILE}" ]; then
         echo "Low-complexity regions already masked. Skipping step."
         return
     fi
@@ -122,17 +136,18 @@ mask_low_complexity_regions() {
 }
 
 # Function to compress masked FASTA file
+# Only the masked FASTA is kept; the unmasked one is a build intermediate and is
+# deleted by cleanup_intermediates() rather than compressed.
 compress_fasta() {
-    if [ -f "mitochondrion_refseq_taxid_masked.fna.gz" ]; then
+    if [ -f "${REF_FILE}" ]; then
         echo "Masked FASTA file already compressed. Skipping step."
         return
     fi
 
     echo "Zipping the masked FASTA file... "
     pigz -p "${threads}" mitochondrion_refseq_taxid_masked.fna
-    pigz -p "${threads}" mitochondrion_refseq_taxid.fna
 
-    if [ ! -f "mitochondrion_refseq_taxid_masked.fna.gz" ]; then
+    if [ ! -f "${REF_FILE}" ]; then
         echo "Error: FASTA file compression failed."
         exit 1
     fi
@@ -142,7 +157,7 @@ compress_fasta() {
 
 # Function to download and extract NCBI taxonomy files
 download_ncbi_taxonomy() {
-    if [ -f "NCBI_taxdump/nodes.dmp" ] && [ -f "NCBI_taxdump/names.dmp" ]; then
+    if [ -f "${NODES_FILE}" ] && [ -f "${NAMES_FILE}" ]; then
         echo "NCBI taxonomy files already downloaded and extracted. Skipping step."
         return
     fi
@@ -161,9 +176,52 @@ download_ncbi_taxonomy() {
     echo "NCBI taxonomy files downloaded successfully."
 }
 
+# Function to remove every build intermediate that no analysis run reads
+# Runs only once the database is verified complete, so an interrupted build keeps
+# its intermediates and can be resumed without re-downloading several GB.
+cleanup_intermediates() {
+    if ! database_complete; then
+        echo "Skipping cleanup: database is incomplete, keeping intermediates for resume."
+        return
+    fi
+
+    echo "Removing build intermediates not used by the analysis pipeline... "
+
+    # Downloads and intermediates of the reference FASTA. The compressed
+    # unmasked FASTA is listed for databases built by earlier script versions.
+    rm -f \
+        mitochondrion_refseq.fa.gz \
+        nucl_gb.accession2taxid.gz \
+        nucl_refseq.accession2taxid.tsv \
+        mitochondrion_refseq_taxid.fna \
+        mitochondrion_refseq_taxid.fna.gz \
+        mitochondrion_refseq_taxid_masked.fna
+
+    # The NCBI taxdump ships ~9 files but LinkTaxonomy.py only reads nodes.dmp
+    # and names.dmp. Whitelist those two so unused files are dropped here.
+    if [ -d "NCBI_taxdump" ]; then
+        find NCBI_taxdump -maxdepth 1 -type f \
+            ! -name "nodes.dmp" ! -name "names.dmp" -delete
+    fi
+
+    echo "Cleanup successful."
+}
+
 cd "${WD}"
 
-# Main execution flow
+###############################################################################
+#                              Main execution flow                            #
+###############################################################################
+
+# A complete database needs no rebuilding. Cleanup still runs so folders built
+# by earlier versions of this script shed their leftover intermediates.
+if database_complete; then
+    echo "Database already complete in ${WD}. Nothing to build."
+    cleanup_intermediates
+    echo "To rebuild from scratch, delete ${WD} and re-run with --create-db."
+    exit 0
+fi
+
 download_genomes
 download_accession_to_taxid
 extract_taxids
@@ -171,3 +229,15 @@ rename_fasta_headers
 mask_low_complexity_regions
 compress_fasta
 download_ncbi_taxonomy
+
+if ! database_complete; then
+    echo "Error: database build finished but required files are missing in ${WD}."
+    exit 1
+fi
+
+cleanup_intermediates
+
+echo ""
+echo "Database ready in ${WD}:"
+du -sh "${REF_FILE}" "${NODES_FILE}" "${NAMES_FILE}"
+du -sh "${WD}"

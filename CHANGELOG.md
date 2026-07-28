@@ -10,8 +10,16 @@
 - **`scripts/LinkTaxonomy.py`**: reads the reference name directly as the taxid instead of extracting it via `ref_name.split("|")[1]`
 - **`scripts/plot_paf_alignments.R`**: sequencing-depth panel now uses a log1p y-axis scale with power-of-ten breaks, so low-depth regions stay visible next to sharp high-depth peaks instead of flattening out on a linear axis
 - **`scripts/plot_paf_alignments.R`**: alignment-coverage panel subtitle now reports breadth-of-coverage percentage instead of the reference name, for clarity
+- **`shell/MakeRef.sh`**: build intermediates are now deleted once the database is verified complete. Only the three files an analysis run actually reads are retained — `mitochondrion_refseq_taxid_masked.fna.gz`, `NCBI_taxdump/nodes.dmp` and `NCBI_taxdump/names.dmp`. Removed: `nucl_gb.accession2taxid.gz`, `nucl_refseq.accession2taxid.tsv`, `mitochondrion_refseq.fa.gz`, the unmasked `mitochondrion_refseq_taxid.fna`, and the seven unused NCBI taxdump files (`citations.dmp`, `delnodes.dmp`, `division.dmp`, `gencode.dmp`, `merged.dmp`, `gc.prt`, `readme.txt`). This shrinks a finished database folder from ~5–10 GB to well under 1 GB
+- **`shell/MakeRef.sh`**: the unmasked `mitochondrion_refseq_taxid.fna` is no longer gzipped (it was only ever an input to `bbmask`); it is deleted instead
+- **`shell/MakeRef.sh`**: a complete database now short-circuits the build instead of re-running steps. Running `--create-db` against an existing database folder reports it as complete and prunes any leftover intermediates, which also migrates folders built by earlier versions
 
-> NOTE: Existing database folders built with the old header format must be rebuilt (delete `mitochondrion_refseq_taxid.fna*` and re-run `ECMSD --create-db`)
+### Fixed
+
+- **`shell/MakeRef.sh`**: `mask_low_complexity_regions()` and `compress_fasta()` tested for the *uncompressed* `.fna` files, which `pigz` had already consumed. Re-running `--create-db` on a complete database therefore repeated the renaming and the slow `bbmask` step, then skipped compression, leaving stale uncompressed FASTA files behind. The guards now test for the compressed artefacts
+- **`shell/MakeRef.sh`**: cleanup only runs after the three required files are verified present, so an interrupted build keeps its intermediates and can be resumed without re-downloading several GB
+
+> NOTE: Existing database folders built with the old header format must be rebuilt. Because a complete database now short-circuits the build, delete the whole database folder and re-run `ECMSD --create-db`
 
 ---
 
