@@ -145,8 +145,6 @@ Including `NW_` scaffolds actively degrades results:
 
 The filter is applied in `shell/MakeRef.sh` (`extract_taxids()`), which restricts the accession-to-taxid mapping to `NC_`. Since `scripts/renameFASTA_taxid.py` only writes sequences whose accession appears in that mapping, `NW_` records never reach the FASTA.
 
-> **Note:** Databases built before this change still contain `NW_` records. To apply the filter, rebuild with `ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder`.
-
 ## Test Data
 
 ECMSD includes a test dataset to verify the installation and demonstrate pipeline functionality. The test data consists of historic DNA (hDNA) sequencing reads from an unknown origin.
