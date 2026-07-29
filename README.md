@@ -7,7 +7,7 @@ ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinforma
 ## Features
 
 - **Fast mitochondrial sequence detection** using minimap2 alignment
-- **Comprehensive reference database** built from NCBI RefSeq mitochondrial genomes
+- **Curated reference database** built from complete, reviewed NCBI RefSeq mitochondrial genomes (`NC_` accessions only)
 - **Taxonomic classification** with customizable hierarchy levels
 - **Quality-based filtering** with configurable mapping quality thresholds
 - **Coverage-based reference filtering**: only references with sufficient breadth of coverage are retained
@@ -27,7 +27,7 @@ Build the reference database before running any analysis:
 ECMSD --create-db --db-folder /path/to/db_folder
 ```
 
-This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxonomy database. It only needs to be run once (or whenever you want to update the reference data). The database folder can then be shared across all subsequent analysis runs and across multiple parallel jobs.
+This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxonomy database. It only needs to be run once (add `--force-rebuild` when you want to refresh the reference data). The database folder can then be shared across all subsequent analysis runs and across multiple parallel jobs.
 
 ### Phase 2 — Per-sample analysis
 
@@ -113,8 +113,39 @@ ECMSD --create-db --db-folder /path/to/db_folder
 
 The database folder can be placed anywhere and reused across all future runs. This step downloads several GB of data from NCBI, so ensure sufficient disk space (~5–10 GB during the build) and a stable internet connection. Build intermediates are deleted once the database is complete, leaving a finished folder of well under 1 GB.
 
+Running `--create-db` against an existing, complete database is a no-op — it reports the database as ready and exits without re-downloading anything. This makes it safe to call unconditionally at the start of a workflow. To refresh the reference data against the current NCBI release, add `--force-rebuild`:
+
+```bash
+ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
+```
+
+This discards the existing database files and downloads everything again. Only files ECMSD created are removed, so a database folder shared with other content is left otherwise intact. Do not use `--force-rebuild` while other ECMSD jobs are reading the same database folder.
+
 > **Why is the database a separate step?**
 > Separating database creation from analysis prevents race conditions when multiple ECMSD instances run in parallel (e.g. in a Snakemake workflow). In the old design, all parallel jobs would compete to create the same database simultaneously. By building the database once upfront, each analysis job simply reads from the shared, pre-built database. This also enables pipelines such as the **[pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)** to run contamination checks from scratch, downloading all required reference files in a single dedicated setup step before launching parallel analysis jobs.
+
+### What goes into the reference database
+
+The database is built from the NCBI RefSeq mitochondrion release, but **only `NC_` accessions are retained**. `NW_` records are discarded.
+
+RefSeq accession prefixes encode how a sequence was produced and how much curation it received:
+
+| Prefix | Meaning | Kept? |
+| --- | --- | --- |
+| `NC_` | Complete genomic molecule, curated RefSeq — a finished, reviewed mitogenome that someone deliberately sequenced, assembled and checked | ✅ |
+| `NW_` | Unplaced/unlocalised genomic scaffold, auto-generated from a whole-genome shotgun assembly — a leftover contig that automated screening flagged as mitochondrial, with no curation and no guarantee of completeness | ❌ |
+
+For reference, other prefixes you may encounter in RefSeq: `NM_`/`NP_` (curated mRNA/protein), `NG_` (curated gene region), `NT_` (assembly scaffold, like `NW_`), `XM_`/`XP_` (automatically predicted, not curated at all).
+
+Including `NW_` scaffolds actively degrades results:
+
+- **Partial and low-quality references.** An `NW_` entry may cover a fraction of the mitogenome, or include nuclear sequence. Reads mapping to such a reference still count towards a taxon, but its breadth of coverage is not comparable to that of a complete mitogenome, which makes `--cov-threshold` behave inconsistently across references.
+- **NUMT contamination.** WGS scaffolds are exactly where nuclear mitochondrial insertions (NUMTs) end up. Mapping to a NUMT-bearing scaffold produces confident-looking hits that are not mitochondrial in origin.
+- **They can displace the curated genome.** The database keeps one reference per taxid, so whichever record for a taxon is encountered first wins. An `NW_` scaffold appearing before the taxon's `NC_` mitogenome would silently replace it.
+
+The filter is applied in `shell/MakeRef.sh` (`extract_taxids()`), which restricts the accession-to-taxid mapping to `NC_`. Since `scripts/renameFASTA_taxid.py` only writes sequences whose accession appears in that mapping, `NW_` records never reach the FASTA.
+
+> **Note:** Databases built before this change still contain `NW_` records. To apply the filter, rebuild with `ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder`.
 
 ## Test Data
 
@@ -200,6 +231,7 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_direct
 
 - `-z, --create-db`: Create a new reference database
 - `-d, --db-folder`: Path to the folder where the database will be stored
+- `-b, --force-rebuild`: Optional — discard an existing database and rebuild it from scratch (implies `--create-db`)
 
 #### Optional Arguments
 

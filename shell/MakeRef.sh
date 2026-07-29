@@ -6,6 +6,8 @@ set -euo pipefail
 WD=$1
 SCRIPT_DIR=$2
 threads=$3
+# "yes" discards an existing database and rebuilds it from scratch (default: "no")
+force_rebuild=${4:-no}
 
 # activate the conda environment
 #eval "$(conda shell.bash hook)"
@@ -17,6 +19,17 @@ threads=$3
 REF_FILE="mitochondrion_refseq_taxid_masked.fna.gz"
 NODES_FILE="NCBI_taxdump/nodes.dmp"
 NAMES_FILE="NCBI_taxdump/names.dmp"
+
+# Build intermediates, removed once the database is complete. The compressed
+# unmasked FASTA is listed for databases built by earlier script versions.
+INTERMEDIATE_FILES=(
+    mitochondrion_refseq.fa.gz
+    nucl_gb.accession2taxid.gz
+    nucl_refseq.accession2taxid.tsv
+    mitochondrion_refseq_taxid.fna
+    mitochondrion_refseq_taxid.fna.gz
+    mitochondrion_refseq_taxid_masked.fna
+)
 
 echo "*********************"
 echo "Setting up RefSeq mitochondrial genome database... "
@@ -75,14 +88,19 @@ download_accession_to_taxid() {
 }
 
 # Function to extract taxids
+# Only NC_ accessions are kept. NC_ marks a curated, complete genomic molecule —
+# for this dataset, a finished and reviewed mitogenome. NW_ marks an unplaced
+# WGS scaffold that automated screening flagged as mitochondrial: uncurated and
+# frequently partial. Since renameFASTA_taxid.py keeps only sequences present in
+# this mapping, restricting it here is what drops NW_ records from the database.
 extract_taxids() {
     if [ -f "nucl_refseq.accession2taxid.tsv" ]; then
         echo "Taxid extraction already completed. Skipping step."
         return
     fi
 
-    echo "Extracting taxids for mitochondrial genomes... "
-    gunzip -c nucl_gb.accession2taxid.gz | awk '$1~/^N[CW]/' | cut -f 2,3 >nucl_refseq.accession2taxid.tsv
+    echo "Extracting taxids for mitochondrial genomes (NC_ accessions only)... "
+    gunzip -c nucl_gb.accession2taxid.gz | awk '$1~/^NC_/' | cut -f 2,3 >nucl_refseq.accession2taxid.tsv
 
     if [ ! -f "nucl_refseq.accession2taxid.tsv" ]; then
         echo "Error: Taxid extraction failed."
@@ -187,15 +205,7 @@ cleanup_intermediates() {
 
     echo "Removing build intermediates not used by the analysis pipeline... "
 
-    # Downloads and intermediates of the reference FASTA. The compressed
-    # unmasked FASTA is listed for databases built by earlier script versions.
-    rm -f \
-        mitochondrion_refseq.fa.gz \
-        nucl_gb.accession2taxid.gz \
-        nucl_refseq.accession2taxid.tsv \
-        mitochondrion_refseq_taxid.fna \
-        mitochondrion_refseq_taxid.fna.gz \
-        mitochondrion_refseq_taxid_masked.fna
+    rm -f "${INTERMEDIATE_FILES[@]}"
 
     # The NCBI taxdump ships ~9 files but LinkTaxonomy.py only reads nodes.dmp
     # and names.dmp. Whitelist those two so unused files are dropped here.
@@ -207,18 +217,43 @@ cleanup_intermediates() {
     echo "Cleanup successful."
 }
 
+# Function to discard an existing database so it is rebuilt from scratch
+# Only files this script is known to create are removed by name, never the
+# database folder itself, since --db-folder may point at a shared directory.
+reset_database() {
+    echo "*** --force-rebuild: discarding the existing database in ${WD} ***"
+
+    for f in "${REF_FILE}" "${INTERMEDIATE_FILES[@]}"; do
+        if [ -f "${f}" ]; then
+            echo "  removing ${f}"
+            rm -f "${f}"
+        fi
+    done
+
+    if [ -d "NCBI_taxdump" ]; then
+        echo "  removing NCBI_taxdump/"
+        rm -rf "NCBI_taxdump"
+    fi
+
+    echo "Existing database discarded. Rebuilding from scratch... "
+    echo ""
+}
+
 cd "${WD}"
 
 ###############################################################################
 #                              Main execution flow                            #
 ###############################################################################
 
+if [ "${force_rebuild}" = "yes" ]; then
+    # Discard whatever is there and fall through to a full rebuild
+    reset_database
 # A complete database needs no rebuilding. Cleanup still runs so folders built
 # by earlier versions of this script shed their leftover intermediates.
-if database_complete; then
+elif database_complete; then
     echo "Database already complete in ${WD}. Nothing to build."
     cleanup_intermediates
-    echo "To rebuild from scratch, delete ${WD} and re-run with --create-db."
+    echo "To rebuild it from scratch, re-run with --create-db --force-rebuild."
     exit 0
 fi
 

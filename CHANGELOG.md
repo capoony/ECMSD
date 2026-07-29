@@ -4,8 +4,14 @@
 
 ## Unreleased
 
+### Added
+
+- **`ECMSD.sh`**: `--force-rebuild` / `-b` — discards an existing database and rebuilds it from scratch. Implies `--create-db`, so `ECMSD --force-rebuild -d /path/to/db` is sufficient. Only files ECMSD is known to create are removed, by name; the database folder itself is never deleted, since `--db-folder` may point at a shared directory. The flag is never propagated from an analysis run, so a job that repairs a missing database cannot discard one that parallel jobs are reading
+
 ### Changed
 
+- **`shell/MakeRef.sh`**: the reference database is now restricted to curated `NC_` accessions; `NW_` records are excluded (`extract_taxids()` filters on `^NC_` instead of `^N[CW]`). `NC_` marks a complete, reviewed genomic molecule — for this dataset, a finished mitogenome. `NW_` marks an unplaced WGS scaffold that automated screening flagged as mitochondrial: uncurated, often partial, and a common carrier of NUMTs. Such references made `--cov-threshold` inconsistent across the database and, because only one reference is kept per taxid, an `NW_` scaffold could silently displace a taxon's curated `NC_` mitogenome
+- **`README.md`**: new "What goes into the reference database" section documenting the `NC_`-only policy, the RefSeq accession prefixes, and why `NW_` scaffolds are excluded
 - **`scripts/renameFASTA_taxid.py`**: FASTA headers are now written as the bare taxid (`>{taxid}`) instead of the legacy `>kraken:taxid|{taxid}` format inherited from the retired Kraken2 workflow (see v1.1.0 removal of `shell/kraken2.sh`)
 - **`scripts/LinkTaxonomy.py`**: reads the reference name directly as the taxid instead of extracting it via `ref_name.split("|")[1]`
 - **`scripts/plot_paf_alignments.R`**: sequencing-depth panel now uses a log1p y-axis scale with power-of-ten breaks, so low-depth regions stay visible next to sharp high-depth peaks instead of flattening out on a linear axis
@@ -19,7 +25,7 @@
 - **`shell/MakeRef.sh`**: `mask_low_complexity_regions()` and `compress_fasta()` tested for the *uncompressed* `.fna` files, which `pigz` had already consumed. Re-running `--create-db` on a complete database therefore repeated the renaming and the slow `bbmask` step, then skipped compression, leaving stale uncompressed FASTA files behind. The guards now test for the compressed artefacts
 - **`shell/MakeRef.sh`**: cleanup only runs after the three required files are verified present, so an interrupted build keeps its intermediates and can be resumed without re-downloading several GB
 
-> NOTE: Existing database folders built with the old header format must be rebuilt. Because a complete database now short-circuits the build, delete the whole database folder and re-run `ECMSD --create-db`
+> NOTE: Existing database folders must be rebuilt — they use the old header format and still contain `NW_` records. Because a complete database now short-circuits the build, a plain `--create-db` will not update them; run `ECMSD --create-db --force-rebuild --db-folder /path/to/db` instead
 
 ---
 
