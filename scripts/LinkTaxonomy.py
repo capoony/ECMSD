@@ -195,10 +195,12 @@ with open(options.OUT+".txt", 'wt') as export:
         chosen_rank = options.TaxonomicHierarchy.lower()
         idx = rank_index.get(chosen_rank, 7)
         label = name_path[idx]
-        # most references are only resolved to species level; fall back rather
-        # than labelling them all "Unknown"
-        if label == "NA" and chosen_rank == "subspecies":
-            label = name_path[7]
+        # most references are only resolved to species level; walk up to the
+        # next coarser rank that is populated rather than labelling them all
+        # "Unknown"
+        while label == "NA" and idx > 0:
+            idx -= 1
+            label = name_path[idx]
         if label == "NA":
             label = "Unknown"
         ref_to_name[ref_name] = "_".join(label.split())
