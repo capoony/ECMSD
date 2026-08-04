@@ -480,7 +480,8 @@ Rscript "${SCRIPT_DIR}/plot_paf_alignments.R" \
     "${Output}" \
     "${PAF}.gz" \
     "${output_base}.ref_summary.txt" \
-    "${top_n}"
+    "${top_n}" \
+    "${taxonomic_hierarchy}"
 
 ###############################################################################
 #                        Pipeline Completed                                   #

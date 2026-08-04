@@ -304,7 +304,7 @@ output_directory/
 - **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
 - **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
 - **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
-- **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references
+- **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references. Titles and file names use the label for the rank requested with `-x`, so a run at species level never shows a subspecies name
 - **minimap2.log**: Detailed minimap2 alignment log
 
 ## Parameters Explanation

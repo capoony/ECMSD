@@ -22,7 +22,7 @@ parser.add_option("--PAF", dest="PAF",
                   help="PAF output file with SeqID in column1 and TaxID in column2")
 parser.add_option("--output", dest="OUT", help="Output file")
 parser.add_option("--TaxonomicHierarchy", dest="TaxonomicHierarchy",
-                  help="Taxonomic rank to use as the label in the ref_summary (e.g. subspecies, species, genus, family). Default: species. If subspecies is chosen but a reference has no subspecies rank, the species name is used instead",
+                  help="Taxonomic rank to use as the label in the ref_summary (e.g. subspecies, species, genus, family). Default: species. Where a reference is not resolved to the requested rank, the label walks up to the next coarser rank that is populated",
                   default="species")
 parser.add_option("--MapQuality", dest="MapQuality",
                   help="Minimum mapping quality for primary alignments (default: 20)",

@@ -11,16 +11,19 @@ suppressPackageStartupMessages({
 #   2  Path to the PAF file (Mito.paf.gz)
 #   3  Path to the ref_summary file (Mito_summary.ref_summary.txt)
 #   4  Top-N references to plot (default: 100)
+#   5  Taxonomic rank requested with -x (default: species)
 # ---------------------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
-  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n]")
+  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n] [rank]")
 }
 
 out_dir <- args[1]
 paf_file <- args[2]
 ref_summary <- args[3]
 top_n <- if (length(args) >= 4) as.integer(args[4]) else 25L
+# `ECMSD.sh` passes -x through verbatim; LinkTaxonomy.py lowercases it
+rank <- if (length(args) >= 5 && nchar(args[5]) > 0) tolower(args[5]) else "species"
 
 plot_dir <- file.path(out_dir, "mapping", "alignment_plots")
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
@@ -122,13 +125,16 @@ for (i in seq_len(nrow(top_refs))) {
   ref_name <- top_refs$ref_name[i]
   taxid <- top_refs$taxid[i]
   taxon_name <- top_refs$taxon_name[i]
-  species_name <- top_refs$species_name[i]
   read_count <- top_refs$read_count[i]
 
-  # Prefer the subspecies name in the title where the reference is resolved that
-  # far; older ref_summary files have no subspecies_name column at all.
-  display_name <- species_name
-  if ("subspecies_name" %in% names(top_refs)) {
+  # `taxon_name` is the label LinkTaxonomy.py wrote for the rank the user asked
+  # for with -x, already walked up to the next populated coarser rank, so it is
+  # what the title must show: at species or coarser a subspecies name is finer
+  # than what was requested. The subspecies_name column is only consulted when
+  # subspecies was actually requested, as a fallback for ref_summary files
+  # written before taxon_name became rank-aware.
+  display_name <- taxon_name
+  if (rank == "subspecies" && "subspecies_name" %in% names(top_refs)) {
     subsp <- top_refs$subspecies_name[i]
     if (!is.na(subsp) && nchar(trimws(subsp)) > 0 && subsp != "NA") {
       display_name <- subsp
@@ -147,15 +153,15 @@ for (i in seq_len(nrow(top_refs))) {
     next
   }
 
-  # Safe filename: taxid + taxon_name + species epithet only (to avoid repeating genus)
-  safe_name <- gsub("[^A-Za-z0-9_]", "_", taxon_name)
-  # species_name uses underscores (e.g. "Drosophila_melanogaster"); strip first word
-  epithet <- sub("^[^_ ]+[_ ]", "", species_name)
-  if (nchar(trimws(epithet)) == 0) epithet <- species_name # fallback if no separator
-  safe_epithet <- gsub("[^A-Za-z0-9_]", "_", epithet)
+  # Safe filename: rank + taxid + the same label the title carries, so file
+  # names follow -x as well. They previously always appended the species
+  # epithet, which repeated the label at species rank and named a finer rank
+  # than requested at genus and above. The %04d rank index and the taxid keep
+  # names unique where a coarse rank collapses several references.
+  safe_name <- gsub("[^A-Za-z0-9_]", "_", display_name)
   png_path <- file.path(
     plot_dir,
-    sprintf("%04d_taxid%s_%s_%s.png", i, taxid, safe_name, safe_epithet)
+    sprintf("%04d_taxid%s_%s.png", i, taxid, safe_name)
   )
 
   tryCatch(
