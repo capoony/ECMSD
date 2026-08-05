@@ -11,16 +11,19 @@ suppressPackageStartupMessages({
 #   2  Path to the PAF file (Mito.paf.gz)
 #   3  Path to the ref_summary file (Mito_summary.ref_summary.txt)
 #   4  Top-N references to plot (default: 100)
+#   5  Taxonomic rank requested with -x (default: species)
 # ---------------------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
-  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n]")
+  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n] [rank]")
 }
 
 out_dir <- args[1]
 paf_file <- args[2]
 ref_summary <- args[3]
 top_n <- if (length(args) >= 4) as.integer(args[4]) else 25L
+# `ECMSD.sh` passes -x through verbatim; LinkTaxonomy.py lowercases it
+rank <- if (length(args) >= 5 && nchar(args[5]) > 0) tolower(args[5]) else "species"
 
 plot_dir <- file.path(out_dir, "mapping", "alignment_plots")
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
@@ -30,7 +33,8 @@ dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
 # ---------------------------------------------------------------------------
 ref_tbl <- read.table(ref_summary,
   header = TRUE, sep = "\t",
-  stringsAsFactors = FALSE, quote = ""
+  stringsAsFactors = FALSE, quote = "",
+  colClasses = c(ref_name = "character")
 )
 ref_tbl <- ref_tbl[!is.na(ref_tbl$taxon_name) & ref_tbl$taxon_name != "NA", ]
 
@@ -80,6 +84,19 @@ cat(sprintf(
 ))
 
 # ---------------------------------------------------------------------------
+# Helper: "nice" breaks for a log1p-scaled depth axis. Default continuous
+# breaks are computed on the untransformed values (e.g. evenly-spaced
+# 0, 1000, 2000, ...), which then bunch up once log1p-compressed. Using
+# powers of ten instead keeps breaks evenly spaced in log space.
+# ---------------------------------------------------------------------------
+log_depth_breaks <- function(max_val) {
+  if (!is.finite(max_val) || max_val <= 0) {
+    return(c(0, 1))
+  }
+  c(0, 10^(0:ceiling(log10(max_val))))
+}
+
+# ---------------------------------------------------------------------------
 # Helper: compute per-position sequencing depth from a pafr data frame
 # Returns a data.frame(pos, depth)
 # ---------------------------------------------------------------------------
@@ -108,8 +125,21 @@ for (i in seq_len(nrow(top_refs))) {
   ref_name <- top_refs$ref_name[i]
   taxid <- top_refs$taxid[i]
   taxon_name <- top_refs$taxon_name[i]
-  species_name <- top_refs$species_name[i]
   read_count <- top_refs$read_count[i]
+
+  # `taxon_name` is the label LinkTaxonomy.py wrote for the rank the user asked
+  # for with -x, already walked up to the next populated coarser rank, so it is
+  # what the title must show: at species or coarser a subspecies name is finer
+  # than what was requested. The subspecies_name column is only consulted when
+  # subspecies was actually requested, as a fallback for ref_summary files
+  # written before taxon_name became rank-aware.
+  display_name <- taxon_name
+  if (rank == "subspecies" && "subspecies_name" %in% names(top_refs)) {
+    subsp <- top_refs$subspecies_name[i]
+    if (!is.na(subsp) && nchar(trimws(subsp)) > 0 && subsp != "NA") {
+      display_name <- subsp
+    }
+  }
 
   # O(1) lookup from pre-split list; also drop any rows with NA tname
   paf_sub <- paf_by_tname[[ref_name]]
@@ -123,20 +153,24 @@ for (i in seq_len(nrow(top_refs))) {
     next
   }
 
-  # Safe filename: taxid + taxon_name + species epithet only (to avoid repeating genus)
-  safe_name <- gsub("[^A-Za-z0-9_]", "_", taxon_name)
-  # species_name uses underscores (e.g. "Drosophila_melanogaster"); strip first word
-  epithet <- sub("^[^_ ]+[_ ]", "", species_name)
-  if (nchar(trimws(epithet)) == 0) epithet <- species_name # fallback if no separator
-  safe_epithet <- gsub("[^A-Za-z0-9_]", "_", epithet)
+  # Safe filename: rank + taxid + the same label the title carries, so file
+  # names follow -x as well. They previously always appended the species
+  # epithet, which repeated the label at species rank and named a finer rank
+  # than requested at genus and above. The %04d rank index and the taxid keep
+  # names unique where a coarse rank collapses several references.
+  safe_name <- gsub("[^A-Za-z0-9_]", "_", display_name)
   png_path <- file.path(
     plot_dir,
-    sprintf("%04d_taxid%s_%s_%s.png", i, taxid, safe_name, safe_epithet)
+    sprintf("%04d_taxid%s_%s.png", i, taxid, safe_name)
   )
 
   tryCatch(
     {
       ref_len_val <- max(paf_sub$tlen)
+
+      # Per-position depth (also used below to compute breadth-of-coverage %)
+      depth_df <- compute_depth(paf_sub)
+      coverage_pct <- 100 * sum(depth_df$depth > 0) / ref_len_val
 
       # --- Panel 1: alignment coverage (breadth) — rectangle per alignment ---
       p_cov <- ggplot(paf_sub) +
@@ -148,10 +182,10 @@ for (i in seq_len(nrow(top_refs))) {
           labels = function(x) paste0(round(x / 1e3, 1), " kb")
         ) +
         labs(
-          title = sprintf("%s  [taxID: %s]", gsub("_", " ", species_name), taxid),
+          title = sprintf("%s  [taxID: %s]", gsub("_", " ", display_name), taxid),
           subtitle = sprintf(
-            "Rank %d  |  %d mapped reads  |  ref: %s",
-            i, read_count, ref_name
+            "Rank %d  |  %d mapped reads  |  %.1f%% coverage",
+            i, read_count, coverage_pct
           ),
           x = "Reference position (bp)", y = "Coverage"
         ) +
@@ -163,15 +197,20 @@ for (i in seq_len(nrow(top_refs))) {
           axis.ticks.y = element_blank()
         )
 
-      # --- Panel 2: sequencing depth ---
-      depth_df <- compute_depth(paf_sub)
+      # --- Panel 2: sequencing depth (log scale so low-depth regions
+      # remain visible next to high peaks; log1p handles depth == 0) ---
       p_depth <- ggplot(depth_df, aes(x = pos, y = depth)) +
         geom_area(fill = "black", alpha = 0.7) +
         scale_x_continuous(
           limits = c(0, ref_len_val),
           labels = function(x) paste0(round(x / 1e3, 1), " kb")
         ) +
-        labs(x = "Reference position (bp)", y = "Depth (×)") +
+        scale_y_continuous(
+          trans = "log1p",
+          breaks = log_depth_breaks(max(depth_df$depth, na.rm = TRUE)),
+          labels = scales::label_comma()
+        ) +
+        labs(x = "Reference position (bp)", y = "Depth (×, log scale)") +
         theme_bw(base_size = 20)
 
       png(png_path, width = 1800, height = 1050, res = 150)

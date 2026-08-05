@@ -35,6 +35,62 @@ data <- data %>%
   filter(MappingQuality > 0) %>%
   distinct(SeqID, .keep_all = TRUE)
 
+# ---------------------------------------------------------------------------
+# Resolve the requested rank.
+#
+# Mito_summary.txt holds one column per rank and writes "NA" wherever a
+# reference is not resolved that far — most references stop at species, so
+# grouping straight on the `subspecies` column dumps the bulk of the reads into
+# a single NA category in every plot. Mirror the fallback LinkTaxonomy.py
+# applies to the ref_summary label: walk up to the next coarser rank that is
+# populated for that read.
+# ---------------------------------------------------------------------------
+rank_chain <- c(
+  "subspecies", "species", "genus", "family", "order",
+  "class", "phylum", "kingdom", "domain"
+)
+
+# fread turns the literal "NA" into a real NA, but be robust to either form
+blank_to_na <- function(x) {
+  x <- as.character(x)
+  x[!is.na(x) & trimws(x) %in% c("", "NA")] <- NA_character_
+  x
+}
+
+# tolerate `-x Subspecies` etc.; the summary columns are all lower case
+if (!(Taxon %in% names(data)) && tolower(Taxon) %in% names(data)) {
+  Taxon <- tolower(Taxon)
+}
+if (!(Taxon %in% names(data))) {
+  stop(paste0(
+    "Taxonomic rank '", Taxon, "' is not a column of ", summary_file,
+    ". Available ranks: ", paste(intersect(rank_chain, names(data)), collapse = ", ")
+  ))
+}
+
+resolved <- blank_to_na(data[[Taxon]])
+n_missing <- sum(is.na(resolved))
+
+if (Taxon %in% rank_chain) {
+  # ranks coarser than the requested one, from finest to coarsest
+  coarser <- rank_chain[(match(Taxon, rank_chain) + 1L):length(rank_chain)]
+  for (r in intersect(coarser, names(data))) {
+    if (!anyNA(resolved)) break
+    fill <- is.na(resolved)
+    resolved[fill] <- blank_to_na(data[[r]])[fill]
+  }
+  n_filled <- n_missing - sum(is.na(resolved))
+  if (n_filled > 0) {
+    message(sprintf(
+      "%d of %d reads have no %s rank; labelled with their next coarser rank instead.",
+      n_filled, nrow(data), Taxon
+    ))
+  }
+}
+
+resolved[is.na(resolved)] <- "Unknown"
+data[[Taxon]] <- resolved
+
 # Summarize read counts by taxon and length
 data_sub <- data %>%
   select(!!sym(Taxon), Length) %>%

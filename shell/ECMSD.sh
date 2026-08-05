@@ -22,6 +22,7 @@ REQUIRED ARGUMENTS FOR ANALYSIS (choose one):
 REQUIRED ARGUMENTS FOR BUILDING DATABASE:
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
+  -b | --force-rebuild                      Optional: discard an existing database and rebuild it from scratch
 
 ALL ARGUMENTS:
   -h | --help                               Show this help message and exit
@@ -29,20 +30,22 @@ ALL ARGUMENTS:
   -f | --fwd FWD_FASTQ                      Path to the forward FASTQ file (default: None)
   -r | --rev REV_FASTQ                      Path to the reverse FASTQ file (default: None)
   -m | --merged MERGED_FASTQ                Path to merged FASTQ file (default: None)
-  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 50)
+  -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 25)
   -n | --top-n N                            Number of top references to generate alignment plots for (default: 25)
   -q | --mapping_quality QUALITY            Mapping quality threshold (default: QUALITY = 20)
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
-  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy (default: HIERARCHY = species)
+  -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy: subspecies, species, genus, family, order, class, phylum, kingdom or domain (default: HIERARCHY = species)
   -c | --force                              Force overwrite of existing output files (default: false)
   -k | --skip-mapping                       Skip mapping and coverage steps; reuse existing PAF and coverage files (implies --force)
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
+  -b | --force-rebuild                      Discard an existing database and rebuild it from scratch (implies --create-db)
 
 Example:
   ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db
   ECMSD --create-db --db-folder /path/to/db_folder
+  ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
   ECMSD -f reads_R1.fastq -o results/ --db-folder /path/to/db_folder
 EOF
 }
@@ -53,7 +56,7 @@ EOF
 fwd=""
 rev=""
 merged=""
-cov_threshold=50
+cov_threshold=25
 top_n=25
 quality=20
 threads=10
@@ -65,6 +68,7 @@ output=""
 prefix=""
 db_folder=""
 create_db=false
+force_rebuild="no"
 
 ###############################################################################
 #                             Argument Parsing                                #
@@ -132,6 +136,10 @@ while [[ $# -gt 0 ]]; do
         create_db=true
         shift
         ;;
+    -b | --force-rebuild)
+        force_rebuild="yes"
+        shift
+        ;;
     -d | --db-folder)
         db_folder="$2"
         shift 2
@@ -169,18 +177,31 @@ fi
 ###############################################################################
 #                        Handle Database Creation Early                      #
 ###############################################################################
+# --force-rebuild only ever applies to a database build, so treat it as implying
+# --create-db rather than rejecting the combination.
+if [[ "${force_rebuild}" == "yes" && "${create_db}" != true ]]; then
+    echo "Note: --force-rebuild implies --create-db."
+    create_db=true
+fi
+
 if [[ "${create_db}" == true ]]; then
     if [[ -z "${db_folder}" ]]; then
         echo "Error: --db-folder must be specified with --create-db."
         exit 1
     fi
 
+    # Database creation is a standalone operation that exits when finished
+    if [[ -n "${fwd}" || -n "${rev}" || -n "${merged}" || -n "${output}" ]]; then
+        echo "Warning: read and output arguments are ignored during database creation."
+        echo "         Run ECMSD again without --create-db/--force-rebuild to analyse samples."
+    fi
+
     echo "Creating database in folder: ${db_folder}"
     mkdir -p "${db_folder}"
 
-    bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+    bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" "${force_rebuild}"
 
-    echo "Database created successfully in ${db_folder}."
+    echo "Database ready in ${db_folder}."
     exit 0
 fi
 
@@ -194,7 +215,9 @@ if [[ -n "${db_folder}" ]]; then
           ! -f "${db_folder}/NCBI_taxdump/names.dmp" || \
           ! -f "${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz" ]]; then
         echo "Database files missing in ${db_folder}. Generating missing files..."
-        bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}"
+        # Never force a rebuild here: an analysis run must not discard a database
+        # that parallel jobs may be reading from.
+        bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" "no"
     fi
 
     REF="${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz"
@@ -457,7 +480,8 @@ Rscript "${SCRIPT_DIR}/plot_paf_alignments.R" \
     "${Output}" \
     "${PAF}.gz" \
     "${output_base}.ref_summary.txt" \
-    "${top_n}"
+    "${top_n}" \
+    "${taxonomic_hierarchy}"
 
 ###############################################################################
 #                        Pipeline Completed                                   #
