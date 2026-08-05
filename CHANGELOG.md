@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased
+## v1.3.0 — Taxonomic hierarchy fidelity & curated reference database (2026-08-06)
 
 ### Added
 
