@@ -35,6 +35,10 @@ parents = {}
 rank_dict = {}
 names = {}
 
+RANKS = ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species", "subspecies"]
+RANK_INDEX = {rank: i for i, rank in enumerate(RANKS)}
+
+
 def load_data(x):
     ''' import data either from a gzipped or uncompressed file or from STDIN'''
     import gzip
@@ -94,6 +98,23 @@ def load_coverage(coverage_file, threshold):
     return passing
 
 
+def fallback_label(name_path, chosen_rank):
+    """
+    Pick the label for `chosen_rank` out of a 9-element name_path (domain..subspecies,
+    "NA" where unresolved). Most references are only resolved to species level, so
+    where the requested rank is "NA" walk up to the next coarser rank that is
+    populated rather than labelling them all "Unknown".
+    """
+    idx = RANK_INDEX.get(chosen_rank, RANK_INDEX["species"])
+    label = name_path[idx]
+    while label == "NA" and idx > 0:
+        idx -= 1
+        label = name_path[idx]
+    if label == "NA":
+        label = "Unknown"
+    return label
+
+
 def main():
 
     if not options.Tax or not options.Names or not options.PAF or not options.OUT or not options.Coverage:
@@ -113,13 +134,6 @@ def main():
             its = [x.replace("\t", "") for x in line.rstrip().split("|")]
             if "scientific name" in line:
                 names[its[0]] = its[1]
-
-# Load taxonomy first (populates parents, rank_dict, names module-level dicts)
-main()
-
-passing_taxids = load_coverage(options.Coverage, float(options.CovThreshold))
-print(
-    f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
 
 
 def get_alignment_score(fields):
@@ -150,71 +164,70 @@ def load_best_hits(paf_path, min_mapq):
     return winners
 
 
-print("Loading PAF alignments...")
-best_hits = load_best_hits(options.PAF, options.MapQuality)
+def run():
+    # Load taxonomy first (populates parents, rank_dict, names module-level dicts)
+    main()
 
-# Count reads per reference (ref_name, taxId) for ranking
-ref_read_counts = d(int)
-ref_to_taxid = {}
-ref_to_name = {}
-ref_to_species = {}
-ref_to_subspecies = {}
+    passing_taxids = load_coverage(options.Coverage, float(options.CovThreshold))
+    print(
+        f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
 
-with open(options.OUT+".txt", 'wt') as export:
-    export.write(
-        "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
-    for seqId, hit_list in best_hits.items():
-        lines = hit_list[0]
-        ref_name = lines[5]
-        taxId = ref_name
+    print("Loading PAF alignments...")
+    best_hits = load_best_hits(options.PAF, options.MapQuality)
 
-        if taxId not in passing_taxids:
-            continue
+    # Count reads per reference (ref_name, taxId) for ranking
+    ref_read_counts = d(int)
+    ref_to_taxid = {}
+    ref_to_name = {}
+    ref_to_species = {}
+    ref_to_subspecies = {}
 
-        if taxId not in names:
-            continue
+    with open(options.OUT+".txt", 'wt') as export:
+        export.write(
+            "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
+        for seqId, hit_list in best_hits.items():
+            lines = hit_list[0]
+            ref_name = lines[5]
+            taxId = ref_name
 
-        node_path, name_path = taxon_trace(taxId)
-        rank_name = dict(zip(node_path.split("|"), name_path.split("|")))
-        name_path = []
-        for rank in ["domain", "kingdom", "phylum", "class", "order", "family", "genus", "species", "subspecies"]:
-            if rank in rank_name:
-                name_path.append(rank_name[rank])
-            else:
-                name_path.append("NA")
+            if taxId not in passing_taxids:
+                continue
 
-        Tax = "\t".join(["_".join(x.split()) for x in name_path])
-        export.write(seqId + "\t" + taxId + "\t" +
-                     lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
+            if taxId not in names:
+                continue
 
-        ref_read_counts[ref_name] += 1
-        ref_to_taxid[ref_name] = taxId
-        rank_index = {"domain": 0, "kingdom": 1, "phylum": 2, "class": 3,
-                      "order": 4, "family": 5, "genus": 6, "species": 7,
-                      "subspecies": 8}
-        chosen_rank = options.TaxonomicHierarchy.lower()
-        idx = rank_index.get(chosen_rank, 7)
-        label = name_path[idx]
-        # most references are only resolved to species level; walk up to the
-        # next coarser rank that is populated rather than labelling them all
-        # "Unknown"
-        while label == "NA" and idx > 0:
-            idx -= 1
-            label = name_path[idx]
-        if label == "NA":
-            label = "Unknown"
-        ref_to_name[ref_name] = "_".join(label.split())
-        species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
-        ref_to_species[ref_name] = "_".join(species_label.split())
-        subspecies_label = name_path[8] if name_path[8] != "NA" else "NA"
-        ref_to_subspecies[ref_name] = "_".join(subspecies_label.split())
+            node_path, name_path_str = taxon_trace(taxId)
+            rank_name = dict(zip(node_path.split("|"), name_path_str.split("|")))
+            name_path = []
+            for rank in RANKS:
+                if rank in rank_name:
+                    name_path.append(rank_name[rank])
+                else:
+                    name_path.append("NA")
 
-# Write ranked reference summary for plotting
-with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
-    ref_out.write(
-        "ref_name\ttaxid\ttaxon_name\tspecies_name\tsubspecies_name\tread_count\n")
-    for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
+            Tax = "\t".join(["_".join(x.split()) for x in name_path])
+            export.write(seqId + "\t" + taxId + "\t" +
+                         lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
+
+            ref_read_counts[ref_name] += 1
+            ref_to_taxid[ref_name] = taxId
+            label = fallback_label(name_path, options.TaxonomicHierarchy.lower())
+            ref_to_name[ref_name] = "_".join(label.split())
+            species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
+            ref_to_species[ref_name] = "_".join(species_label.split())
+            subspecies_label = name_path[8] if name_path[8] != "NA" else "NA"
+            ref_to_subspecies[ref_name] = "_".join(subspecies_label.split())
+
+    # Write ranked reference summary for plotting
+    with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:
         ref_out.write(
-            f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{ref_to_subspecies[ref_name]}\t{count}\n")
+            "ref_name\ttaxid\ttaxon_name\tspecies_name\tsubspecies_name\tread_count\n")
+        for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
+            ref_out.write(
+                f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{ref_to_subspecies[ref_name]}\t{count}\n")
 
-print(f"Reference summary written to: {options.OUT}.ref_summary.txt")
+    print(f"Reference summary written to: {options.OUT}.ref_summary.txt")
+
+
+if __name__ == "__main__":
+    run()

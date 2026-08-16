@@ -7,3 +7,4 @@ scripts/LinkTaxonomy_old.py
 scripts/logs/
 shell/ECMSD_old.sh
 .DS_Store
+__pycache__/

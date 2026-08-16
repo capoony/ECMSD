@@ -2,6 +2,18 @@
 
 ---
 
+## Unreleased
+
+### Added
+
+- **`scripts/tests/`**: unit tests for `LinkTaxonomy.py` and `renameFASTA_taxid.py` (stdlib `unittest`, no new dependency). Covers PAF alignment-score parsing, coverage-threshold filtering, mapping-quality filtering, taxonomy-path tracing, the taxonomic rank walk-up fallback, and FASTA header rename/dedup-by-taxid
+
+### Changed
+
+- **`scripts/LinkTaxonomy.py`**, **`scripts/renameFASTA_taxid.py`**: driver logic moved behind `if __name__ == "__main__"`; both scripts previously ran their full pipeline at import time, which made the underlying functions impossible to unit test. CLI behaviour is unchanged. The rank walk-up logic in `LinkTaxonomy.py` is now a standalone `fallback_label()` function and the FASTA dedup loop in `renameFASTA_taxid.py` is now `rename_fasta()`
+
+---
+
 ## v1.3.0 — Taxonomic hierarchy fidelity & curated reference database (2026-08-06)
 
 ### Added
