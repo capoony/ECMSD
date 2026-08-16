@@ -465,8 +465,7 @@ if [[ ! -f "${summary_file}" ]]; then
 fi
 
 if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
-    echo "Error: Mito summary file '${summary_file}' is empty or has no data."
-    exit 1
+    echo "Warning: No references passed the coverage threshold (--cov-threshold ${cov_threshold}). Skipping plots."
 fi
 
 echo "Plotting results..."
