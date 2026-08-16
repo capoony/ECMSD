@@ -36,7 +36,7 @@ conda install -y \
     conda-forge::r-data.table \
     conda-forge::pigz \
     conda-forge::wget \
-    "conda-forge::python>=3.6"
+    "conda-forge::python>=3.6=*cpython*"
 
 # Remove existing installation if present
 if [[ -d "$CONDA_PREFIX/lib/ecmsd" ]]; then
