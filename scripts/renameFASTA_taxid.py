@@ -19,8 +19,6 @@ parser.add_option("--output", dest="OUT", help="Output file")
 (options, args) = parser.parse_args()
 parser.add_option_group(group)
 
-#
-
 
 def load_data(x):
     ''' import data either from a gzipped or or uncrompessed file or from STDIN'''
@@ -35,62 +33,56 @@ def load_data(x):
     return y
 
 
-# check if the required options are provided
-if not options.IN or not options.OUT or not options.TX:
-    parser.print_help()
-    sys.exit(1)
+def load_taxid_dict(fh):
+    """Parse a tab-separated name<tab>taxid stream into a name->taxid dict."""
+    taxid_dict = d(str)
+    for l in fh:
+        name, taxid = l.rstrip().split("\t")
+        taxid_dict[name] = taxid
+    return taxid_dict
 
-# check if files exist
 
-if not os.path.isfile(options.IN):
-    print(f"Error: Input file {options.IN} does not exist.")
-    sys.exit(1)
-if not os.path.isfile(options.TX):
-    print(f"Error: Taxid file {options.TX} does not exist.")
-    sys.exit(1)
-
-# Create a dictionary to map names to taxids
-# The dictionary will be used to rename the FASTA headers
-# to include the taxid in the format: ><taxid>
-# The taxid will be used to filter the sequences based on the taxid
-TaxidDict = d(str)
-for l in load_data(options.TX):
-    # Split the line into name and taxid
-    # The input file is expected to be a tab-separated file with two columns:
-    # name<tab>taxid
-    name, taxid = l.rstrip().split("\t")
-    TaxidDict[name] = taxid
-
-# Create a set to keep track of taxids that have already been written
-# This will prevent duplicate entries in the output file
-# The set will be used to filter the sequences based on the taxid
-# If a taxid is already in the set, it will be skipped
-# If a taxid is not in the set, it will be added to the set and written to the output file
-IDlist = d(str)
-# Initialize a flag to skip lines that do not match the taxid
-SKIP = False
-# Read the input FASTA file and rename the headers
-with load_data(options.IN) as f, open(options.OUT, "wt") as o:
-    # Iterate through each line in the input file
-    for line in f:
-        # Check if the line starts with '>' indicating a FASTA header
+def rename_fasta(in_fh, out_fh, taxid_dict):
+    """
+    Rewrite a FASTA stream, replacing each header with its taxid (drops the
+    sequence description). Keeps only the first sequence seen per taxid;
+    later sequences mapping to an already-written taxid (or to a name not in
+    taxid_dict) are dropped entirely.
+    """
+    seen_taxids = set()
+    skip = False
+    for line in in_fh:
         if line.startswith(">"):
-            # Extract the name from the header line
             name = line[1:].rstrip().split(" ")[0]
-            # Check if the name is in the TaxidDict and if the taxid is not already in IDlist
-            if name in TaxidDict and TaxidDict[name] not in IDlist:
-                # If the taxid is not in IDlist, add it to IDlist and write the new header
-                SKIP = False
-                IDlist[TaxidDict[name]] = True
-                o.write(f">{TaxidDict[name]}\n")
+            if name in taxid_dict and taxid_dict[name] not in seen_taxids:
+                skip = False
+                seen_taxids.add(taxid_dict[name])
+                out_fh.write(f">{taxid_dict[name]}\n")
                 continue
-            # If the name is not in TaxidDict or the taxid is already in IDlist, skip the line
             else:
-                SKIP = True
-        # If the line does not start with '>', it is a sequence line
-        # Write the sequence line only if SKIP is False
-        # This ensures that only sequences with valid taxids are written to the output file
-        # If SKIP is True, the sequence line will be skipped
-        # This prevents writing sequences that do not match the taxid criteria
-        if SKIP == False:
-            o.write(line)
+                skip = True
+        if not skip:
+            out_fh.write(line)
+
+
+def run():
+    if not options.IN or not options.OUT or not options.TX:
+        parser.print_help()
+        sys.exit(1)
+
+    if not os.path.isfile(options.IN):
+        print(f"Error: Input file {options.IN} does not exist.")
+        sys.exit(1)
+    if not os.path.isfile(options.TX):
+        print(f"Error: Taxid file {options.TX} does not exist.")
+        sys.exit(1)
+
+    with load_data(options.TX) as tx_fh:
+        taxid_dict = load_taxid_dict(tx_fh)
+
+    with load_data(options.IN) as f, open(options.OUT, "wt") as o:
+        rename_fasta(f, o, taxid_dict)
+
+
+if __name__ == "__main__":
+    run()
