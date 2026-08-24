@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+---
+
+## v1.3.1 — Test coverage & no-hits threshold fix (2026-08-17)
+
 ### Added
 
 - **`scripts/tests/`**: unit tests for `LinkTaxonomy.py` and `renameFASTA_taxid.py` (stdlib `unittest`, no new dependency). Covers PAF alignment-score parsing, coverage-threshold filtering, mapping-quality filtering, taxonomy-path tracing, the taxonomic rank walk-up fallback, and FASTA header rename/dedup-by-taxid
@@ -17,6 +21,10 @@
 
 - **`ECMSD.sh`**, **`scripts/process_files.R`**: a run where no reference clears `--cov-threshold` no longer fails. `ECMSD.sh` exited 1 on an empty summary file and `process_files.R` called `stop()` on zero taxa; both now log a warning/message, skip plot generation, and exit 0, still writing the declared (header-only) summary tables. A Snakemake rule around ECMSD (e.g. pastforward) requires its declared outputs to exist and treats a nonzero exit as rule failure, so a legitimate "no hits" result was indistinguishable from a crash
 - **`shell/install.sh`**: the `conda-forge::python>=3.6` dependency spec could resolve to a GraalPy build instead of CPython, which breaks every `python3` call the pipeline makes (GraalPy's launcher fails outright without its own JVM setup). Pinned to `conda-forge::python>=3.6=*cpython*`
+
+### Chore
+
+- **`scripts/tests/`**: further coverage for both scripts' `load_data()` (plain/gzip/stdin dispatch), `LinkTaxonomy.py`'s `main()` (nodes.dmp/names.dmp parsing, including that non-"scientific name" `names.dmp` entries are ignored) and `taxon_trace()`'s error exit on a broken taxonomy path, and `renameFASTA_taxid.py`'s `run()` (missing input/taxid file handling, plus an end-to-end run producing a renamed FASTA). No functional code changed
 
 ---
 
