@@ -370,7 +370,8 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 
 If you use ECMSD in your research, please cite:
 
-[Citation information to be added]
+> Saadain, S., Kapun, M., & Kofler, R. (2026). pastForward: a Snakemake pipeline for ancient and historical DNA with eukaryote-wide taxonomic screening and tracking of copy-number variation. *bioRxiv*. https://doi.org/10.64898/2026.08.07.743613
+
 
 ## License
 
