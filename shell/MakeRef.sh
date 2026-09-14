@@ -55,6 +55,7 @@ database_complete() {
 fetch_gz() {
     local url=$1 dest=$2
     wget -O "${dest}.tmp" "${url}"
+    echo "Checking ${dest} for damage (gzip -t), this can take several minutes for large files... "
     if ! gzip -t "${dest}.tmp"; then
         rm -f "${dest}.tmp"
         echo "Error: ${dest} was damaged in transit. Re-run to download it again."
