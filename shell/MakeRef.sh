@@ -49,7 +49,23 @@ database_complete() {
     [ -f "${REF_FILE}" ] && [ -f "${NODES_FILE}" ] && [ -f "${NAMES_FILE}" ]
 }
 
+# Download a gzip file to a temp name and promote it only once it is intact.
+# A killed or damaged download therefore never leaves a file that the
+# "already downloaded" guards would accept on the next run.
+fetch_gz() {
+    local url=$1 dest=$2
+    wget -O "${dest}.tmp" "${url}"
+    if ! gzip -t "${dest}.tmp"; then
+        rm -f "${dest}.tmp"
+        echo "Error: ${dest} was damaged in transit. Re-run to download it again."
+        exit 1
+    fi
+    mv "${dest}.tmp" "${dest}"
+}
+
 # Function to download mitochondrial genomes
+# Uses HTTPS, not the recursive FTP fetch used before: that wrote every file into
+# one -O target and was seen to deliver a corrupt archive with extra bytes.
 download_genomes() {
     if [ -f "mitochondrion_refseq.fa.gz" ]; then
         echo "Mitochondrial genomes already downloaded. Skipping download step."
@@ -57,9 +73,22 @@ download_genomes() {
     fi
 
     echo "Downloading mitochondrial genomes from NCBI RefSeq... "
-    wget -r -np -nd -A "*.genomic.fna.gz" \
-        ftp://ftp.ncbi.nlm.nih.gov/refseq/release/mitochondrion/ \
-        -O mitochondrion_refseq.fa.gz
+    local base="https://ftp.ncbi.nlm.nih.gov/refseq/release/mitochondrion"
+    # The release may be split into several numbered parts; fetch all of them
+    local parts
+    parts=$(wget -qO- "${base}/" | grep -o 'mitochondrion\.[0-9.]*genomic\.fna\.gz' | sort -u) || true
+    if [ -z "${parts}" ]; then
+        echo "Error: no genomic FASTA files listed at ${base}/"
+        exit 1
+    fi
+
+    for part in ${parts}; do
+        fetch_gz "${base}/${part}" "${part}"
+    done
+    # Concatenated gzip members are still a valid gzip stream
+    cat ${parts} >mitochondrion_refseq.fa.gz.tmp
+    mv mitochondrion_refseq.fa.gz.tmp mitochondrion_refseq.fa.gz
+    rm -f ${parts}
 
     if [ ! -f "mitochondrion_refseq.fa.gz" ]; then
         echo "Error: Mitochondrial genome download failed."
@@ -77,7 +106,8 @@ download_accession_to_taxid() {
     fi
 
     echo "Downloading accession to taxid mapping file... "
-    wget https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz
+    fetch_gz https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/accession2taxid/nucl_gb.accession2taxid.gz \
+        nucl_gb.accession2taxid.gz
 
     if [ ! -f "nucl_gb.accession2taxid.gz" ]; then
         echo "Error: Accession to taxid mapping file download failed."
@@ -100,7 +130,8 @@ extract_taxids() {
     fi
 
     echo "Extracting taxids for mitochondrial genomes (NC_ accessions only)... "
-    gunzip -c nucl_gb.accession2taxid.gz | awk '$1~/^NC_/' | cut -f 2,3 >nucl_refseq.accession2taxid.tsv
+    gunzip -c nucl_gb.accession2taxid.gz | awk '$1~/^NC_/' | cut -f 2,3 >nucl_refseq.accession2taxid.tsv.tmp
+    mv nucl_refseq.accession2taxid.tsv.tmp nucl_refseq.accession2taxid.tsv
 
     if [ ! -f "nucl_refseq.accession2taxid.tsv" ]; then
         echo "Error: Taxid extraction failed."
@@ -121,7 +152,8 @@ rename_fasta_headers() {
     python3 "${SCRIPT_DIR}/renameFASTA_taxid.py" \
         --Taxid "${WD}/nucl_refseq.accession2taxid.tsv" \
         --input "${WD}/mitochondrion_refseq.fa.gz" \
-        --output "${WD}/mitochondrion_refseq_taxid.fna"
+        --output "${WD}/mitochondrion_refseq_taxid.fna.tmp"
+    mv mitochondrion_refseq_taxid.fna.tmp mitochondrion_refseq_taxid.fna
 
     if [ ! -f "mitochondrion_refseq_taxid.fna" ]; then
         echo "Error: FASTA header renaming failed."
@@ -143,7 +175,9 @@ mask_low_complexity_regions() {
     echo "Masking low-complexity regions in the mitochondrial genomes... "
     bbmask.sh \
         in=mitochondrion_refseq_taxid.fna \
-        out=mitochondrion_refseq_taxid_masked.fna
+        out=mitochondrion_refseq_taxid_masked.tmp.fna \
+        overwrite=t
+    mv mitochondrion_refseq_taxid_masked.tmp.fna mitochondrion_refseq_taxid_masked.fna
 
     if [ ! -f "mitochondrion_refseq_taxid_masked.fna" ]; then
         echo "Error: Low-complexity region masking failed."
@@ -163,7 +197,9 @@ compress_fasta() {
     fi
 
     echo "Zipping the masked FASTA file... "
-    pigz -p "${threads}" mitochondrion_refseq_taxid_masked.fna
+    pigz -p "${threads}" -c mitochondrion_refseq_taxid_masked.fna >"${REF_FILE}.tmp"
+    mv "${REF_FILE}.tmp" "${REF_FILE}"
+    rm -f mitochondrion_refseq_taxid_masked.fna
 
     if [ ! -f "${REF_FILE}" ]; then
         echo "Error: FASTA file compression failed."
@@ -182,7 +218,7 @@ download_ncbi_taxonomy() {
 
     echo "Downloading NCBI taxonomy files... "
     mkdir -p NCBI_taxdump
-    wget -P NCBI_taxdump ftp://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz
+    fetch_gz https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdump.tar.gz NCBI_taxdump/taxdump.tar.gz
 
     if [ ! -f "NCBI_taxdump/taxdump.tar.gz" ]; then
         echo "Error: NCBI taxonomy file download failed."
