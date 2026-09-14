@@ -2,12 +2,12 @@
 
 ---
 
-## Unreleased
+## v1.3.2 — Database build fixes (2026-09-14)
 
 ### Fixed
 
-- **`shell/MakeRef.sh`**: `--create-db` could build from a corrupt RefSeq download and could not recover on re-run. The recursive FTP fetch (`wget -r ... -O`) was seen to deliver `mitochondrion_refseq.fa.gz` with 848,632 extra bytes, crashing `renameFASTA_taxid.py` with `zlib.error: Error -3 while decompressing data`. Downloads now use HTTPS, and every file is checked with `gzip -t` before it is kept (`fetch_gz()`)
-- **`shell/MakeRef.sh`**: a step that crashed partway left its output file behind, and the "already done" check on the next run accepted it. For example, a crashed header rename left a partial `mitochondrion_refseq_taxid.fna`, and the re-run passed it to `bbmask`, which aborted on misformatted input. Every step now writes to a `.tmp` file and renames it only after the step succeeds. `taxdump.tar.gz` is also fetched with `-O`, so a retry no longer saves `taxdump.tar.gz.1` next to a broken earlier copy
+- **`shell/MakeRef.sh`**: downloads now use HTTPS and are checked with `gzip -t` before they are kept. The old FTP fetch could deliver a corrupt `mitochondrion_refseq.fa.gz`, which crashed `renameFASTA_taxid.py` with a `zlib.error`
+- **`shell/MakeRef.sh`**: each step writes to a `.tmp` file and renames it only on success, so a re-run no longer accepts a partial output left by a crashed step
 
 ---
 
