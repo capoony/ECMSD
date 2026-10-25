@@ -2,27 +2,14 @@ import gzip
 import os
 import sys
 import tempfile
+import types
 import unittest
+from unittest import mock
 
 sys.argv = sys.argv[:1]  # keep optparse from choking on unittest's own flags
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import LinkTaxonomy as lt
-
-
-class GetAlignmentScoreTests(unittest.TestCase):
-
-    def test_returns_score_when_ms_tag_present(self):
-        fields = ["read1"] * 12 + ["tp:A:P", "ms:i:1234", "cg:Z:10M"]
-        self.assertEqual(lt.get_alignment_score(fields), 1234)
-
-    def test_returns_zero_when_no_ms_tag(self):
-        fields = ["read1"] * 12 + ["tp:A:P", "cg:Z:10M"]
-        self.assertEqual(lt.get_alignment_score(fields), 0)
-
-    def test_returns_zero_when_no_optional_fields_at_all(self):
-        fields = ["read1"] * 12
-        self.assertEqual(lt.get_alignment_score(fields), 0)
 
 
 class LoadDataTests(unittest.TestCase):
@@ -89,7 +76,7 @@ class LoadCoverageTests(unittest.TestCase):
 
 class LoadBestHitsTests(unittest.TestCase):
 
-    def test_filters_by_mapq_and_groups_by_read(self):
+    def test_filters_by_mapq_and_keeps_first_hit_per_read(self):
         paf = (
             "read1\t0\t0\t0\t+\trefA\t0\t0\t0\t0\t0\t30\n"
             "read1\t0\t0\t0\t+\trefB\t0\t0\t0\t0\t0\t30\n"
@@ -99,7 +86,7 @@ class LoadBestHitsTests(unittest.TestCase):
         try:
             winners = lt.load_best_hits(path, min_mapq=20)
             self.assertEqual(list(winners.keys()), ["read1"])
-            self.assertEqual(len(winners["read1"]), 2)
+            self.assertEqual(winners["read1"][5], "refA")
         finally:
             os.remove(path)
 
@@ -221,8 +208,10 @@ class FallbackLabelTests(unittest.TestCase):
         path = ["NA"] * 9
         self.assertEqual(lt.fallback_label(path, "species"), "Unknown")
 
-    def test_unknown_requested_rank_defaults_to_species_index(self):
-        self.assertEqual(lt.fallback_label(self.FULL, "not-a-real-rank"), "Homo sapiens")
+    def test_unknown_rank_exits(self):
+        with mock.patch.object(lt, "options", types.SimpleNamespace(TaxonomicHierarchy="bogus")):
+            with self.assertRaises(SystemExit):
+                lt.run()
 
 
 if __name__ == "__main__":

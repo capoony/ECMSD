@@ -226,7 +226,13 @@ download_ncbi_taxonomy() {
         exit 1
     fi
 
-    (cd NCBI_taxdump && tar -xzf taxdump.tar.gz && rm taxdump.tar.gz)
+    # Extract into a temp dir and move into place, so an interrupted extraction
+    # never leaves a partial nodes.dmp/names.dmp that the guards would accept.
+    rm -rf NCBI_taxdump.tmp
+    mkdir NCBI_taxdump.tmp
+    tar -xzf NCBI_taxdump/taxdump.tar.gz -C NCBI_taxdump.tmp
+    mv NCBI_taxdump.tmp/* NCBI_taxdump/
+    rm -rf NCBI_taxdump.tmp NCBI_taxdump/taxdump.tar.gz
 
     echo "NCBI taxonomy files downloaded successfully."
 }
@@ -252,6 +258,45 @@ cleanup_intermediates() {
     fi
 
     echo "Cleanup successful."
+}
+
+# Function to trim nodes.dmp and names.dmp to the lineages of taxids in the final
+# FASTA (headers are bare taxids). Keeps every ancestor up to root 1, so
+# LinkTaxonomy.py lookups still resolve. Resumable: a trimmed nodes.dmp is
+# tiny, so re-trimming is idempotent, and files are replaced via .tmp + mv.
+trim_taxdump() {
+    echo "Trimming taxonomy files to taxids present in the database... "
+    local ids
+    ids=$(gzip -dc "${REF_FILE}" | grep '^>' | tr -d '>') || true
+    if [ -z "${ids}" ]; then
+        echo "Error: no taxids found in ${REF_FILE}; not trimming taxonomy."
+        exit 1
+    fi
+    printf '%s\n' "${ids}" | python3 -c '
+import sys
+nodes, names = sys.argv[1:3]
+keep = {l.strip() for l in sys.stdin if l.strip()}
+parent, lines = {}, {}
+for l in open(nodes, encoding="latin-1"):
+    f = l.split("\t|\t")
+    parent[f[0].strip()] = f[1].strip()
+todo = list(keep)
+keep = set()
+while todo:
+    t = todo.pop()
+    if t in keep or t not in parent:
+        continue
+    keep.add(t)
+    todo.append(parent[t])
+for src in (nodes, names):
+    with open(src + ".tmp", "w", encoding="latin-1") as o:
+        for l in open(src, encoding="latin-1"):
+            if l.split("\t|\t")[0].strip() in keep:
+                o.write(l)
+' "${NODES_FILE}" "${NAMES_FILE}" || { rm -f "${NODES_FILE}.tmp" "${NAMES_FILE}.tmp"; echo "Error: taxonomy trimming failed."; exit 1; }
+    mv "${NODES_FILE}.tmp" "${NODES_FILE}"
+    mv "${NAMES_FILE}.tmp" "${NAMES_FILE}"
+    echo "Taxonomy trimming successful."
 }
 
 # Function to discard an existing database so it is rebuilt from scratch
@@ -307,6 +352,7 @@ if ! database_complete; then
     exit 1
 fi
 
+trim_taxdump
 cleanup_intermediates
 
 echo ""

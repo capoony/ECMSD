@@ -1,14 +1,13 @@
 import functools
 from collections import defaultdict as d
 import sys
-from optparse import OptionParser, OptionGroup
+from optparse import OptionParser
 
 # Author: Martin Kapun
 
 #########################################################   HELP   #########################################################################
 usage = "python %prog --input file --output file "
 parser = OptionParser(usage=usage)
-group = OptionGroup(parser, '< put description here >')
 
 #########################################################   CODE   #########################################################################
 
@@ -29,7 +28,6 @@ parser.add_option("--MapQuality", dest="MapQuality",
                   default=20, type="int")
 
 (options, args) = parser.parse_args()
-parser.add_option_group(group)
 
 parents = {}
 rank_dict = {}
@@ -105,7 +103,7 @@ def fallback_label(name_path, chosen_rank):
     where the requested rank is "NA" walk up to the next coarser rank that is
     populated rather than labelling them all "Unknown".
     """
-    idx = RANK_INDEX.get(chosen_rank, RANK_INDEX["species"])
+    idx = RANK_INDEX[chosen_rank]
     label = name_path[idx]
     while label == "NA" and idx > 0:
         idx -= 1
@@ -136,19 +134,11 @@ def main():
                 names[its[0]] = its[1]
 
 
-def get_alignment_score(fields):
-    """Return the best available alignment score from PAF optional fields."""
-    for f in fields[12:]:
-        if f.startswith("ms:i:"):
-            return int(f[5:])
-    return 0
-
-
 def load_best_hits(paf_path, min_mapq):
-    """Single-pass: keep every primary alignment that passes MQ.
-    Returns a dict: read_name -> list of PAF fields for that read.
+    """Single-pass: keep the first alignment per read that passes MQ.
+    Returns a dict: read_name -> PAF fields of the first passing alignment.
     """
-    winners = d(list)
+    winners = {}
     with load_data(paf_path) as fh:
         for line in fh:
             fields = line.rstrip().split("\t")
@@ -158,13 +148,15 @@ def load_best_hits(paf_path, min_mapq):
             mapq = int(fields[11])
             if mapq < min_mapq:
                 continue
-            winners[read_name].append(fields)
+            winners.setdefault(read_name, fields)
 
     print(f"PAF loaded: {len(winners)} reads passed MQ filter.")
     return winners
 
 
 def run():
+    if options.TaxonomicHierarchy not in RANK_INDEX:
+        sys.exit(f"Unknown rank '{options.TaxonomicHierarchy}'. Choose from: {', '.join(RANKS)}")
     # Load taxonomy first (populates parents, rank_dict, names module-level dicts)
     main()
 
@@ -185,8 +177,7 @@ def run():
     with open(options.OUT+".txt", 'wt') as export:
         export.write(
             "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
-        for seqId, hit_list in best_hits.items():
-            lines = hit_list[0]
+        for seqId, lines in best_hits.items():
             ref_name = lines[5]
             taxId = ref_name
 

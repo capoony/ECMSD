@@ -35,8 +35,8 @@ ECMSD \
     --out "${WD}/TestOutput" \
     --db-folder "${DB}" \
     --threads 20 \
-    --binsize 1000 \
-    --RMUS-threshold 0.15 \
+    --cov-threshold 10 \
+    --top-n 25 \
     --mapping_quality 20 \
     --taxonomic-hierarchy genus \
     --force

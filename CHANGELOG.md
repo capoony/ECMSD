@@ -2,6 +2,41 @@
 
 ---
 
+## v1.3.3 — Audit fixes (2026-10-25)
+
+### Changed
+
+- **`ECMSD.sh`**: default `--cov-threshold` lowered from 25% to 5%
+- **`scripts/LinkTaxonomy.py`**: `load_best_hits` keeps only the first passing alignment per read instead of every line, which cuts memory on large samples
+- **`ECMSD.sh`**: the coverage filter is now `scripts/coverage.py`, covered by unit tests
+- **`shell/MakeRef.sh`**: at the end of `--create-db`, `nodes.dmp` and `names.dmp` are trimmed to the lineages of the taxids in the FASTA, so each run parses a few thousand taxa instead of the whole NCBI taxonomy. A database built earlier is not trimmed until it is rebuilt
+
+### Fixed
+
+- **`ECMSD.sh`**: log text from `run_mapping` went to stdout and ended up inside `Mito.paf.gz`; it now goes to stderr
+- **`ECMSD.sh`**: `-c/--force` ran `rm -rf` on the whole output folder and could delete input reads or a project folder; it now removes only `mapping/` and `logs/`
+- **`ECMSD.sh`**: an analysis run no longer starts `MakeRef.sh` when database files are missing (parallel jobs raced on the same `.tmp` files); it prints "Run `ECMSD --create-db` first" and exits 1
+- **`README.md`**: removed the "Paired-end with additional merged reads" example, which the script rejects
+- **`ECMSD.sh`**: option values (`-x`, `-u`, `-q`, `-n`, `-t`) and missing option values are checked before mapping instead of failing after hours of compute
+- **`scripts/LinkTaxonomy.py`**: an unknown `--TaxonomicHierarchy` rank now exits with an error instead of falling back to species
+- **`scripts/coverage.py`**: reads with the same name (paired mates) on one reference were deduplicated to one, undercounting breadth; the dedupe key now includes start and end
+- **`TestData/shell.sh`**: replaced the removed `--binsize` and `--RMUS-threshold` options with `--cov-threshold 10 --top-n 25`
+- **`shell/MakeRef.sh`**: the taxdump is extracted into `NCBI_taxdump.tmp/` and moved into place, so a killed extraction no longer leaves a truncated `names.dmp`
+- **`.github/workflows/auto-tag.yml`**: commit author name, email and tag are passed through `env:` instead of being interpolated into shell commands
+- **`ECMSD.sh`**: the "no references passed" warning said plots were skipped although both R scripts still run; it now says plots will be empty
+- **`ECMSD.sh`**: `LinkTaxonomy.py` is called with `python3`
+
+### Removed
+
+- **`ECMSD.sh`**, **`scripts/LinkTaxonomy.py`**, **`scripts/renameFASTA_taxid.py`**: unreachable `rev`/`merged` checks, the duplicate merged-file check, the unused `get_alignment_score` and the empty `OptionGroup`
+- **`conda/meta.yaml`**: stale v1.1.0 recipe; the bioconda recipe is the maintained one
+
+### Docs
+
+- **`README.md`**: new "Known limitations" section: one genome is kept per taxid, so multi-record mitochondrial genomes lose all but the first record
+
+---
+
 ## v1.3.2 — Database build fixes (2026-09-14)
 
 ### Fixed

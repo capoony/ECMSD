@@ -1,14 +1,13 @@
 import sys
 import os
 from collections import defaultdict as d
-from optparse import OptionParser, OptionGroup
+from optparse import OptionParser
 
 # Author: Martin Kapun
 
 #########################################################   HELP   #########################################################################
 usage = "python %prog --input file --output file "
 parser = OptionParser(usage=usage)
-group = OptionGroup(parser, '< put description here >')
 
 #########################################################   CODE   #########################################################################
 
@@ -17,7 +16,6 @@ parser.add_option("--Taxid", dest="TX", help="")
 parser.add_option("--output", dest="OUT", help="Output file")
 
 (options, args) = parser.parse_args()
-parser.add_option_group(group)
 
 
 def load_data(x):
