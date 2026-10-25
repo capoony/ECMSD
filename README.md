@@ -234,7 +234,7 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_direct
 #### Optional Arguments
 
 - `-r, --rev`: Path to the reverse FASTQ file (for paired-end data; requires `--fwd`)
-- `-u, --cov-threshold`: Minimum percentage of a reference covered by reads to retain it (default: 25)
+- `-u, --cov-threshold`: Minimum percentage of a reference covered by reads to retain it (default: 5)
 - `-n, --top-n`: Number of top references to generate per-reference alignment plots for (default: 25)
 - `-q, --mapping_quality`: Mapping quality threshold (default: 20)
 - `-t, --threads`: Number of threads to use (default: 10)

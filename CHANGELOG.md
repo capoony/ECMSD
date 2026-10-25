@@ -2,6 +2,14 @@
 
 ---
 
+## Unreleased
+
+### Changed
+
+- **`ECMSD.sh`**: default `--cov-threshold` lowered from 25% to 5%
+
+---
+
 ## v1.3.2 — Database build fixes (2026-09-14)
 
 ### Fixed
