@@ -211,10 +211,11 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -o output_directory/ -d /path/to/db
 
 # Merged reads only
 ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
-
-# Paired-end with additional merged reads
-ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_directory/ -d /path/to/db
 ```
+
+### Known limitations
+
+- The database keeps one genome per taxid (the first sequence encountered wins), so multi-record mitogenomes lose their other records.
 
 ### Command Line Options
 
@@ -238,7 +239,7 @@ ECMSD -f reads_R1.fastq -r reads_R2.fastq -m merged_reads.fastq -o output_direct
 - `-n, --top-n`: Number of top references to generate per-reference alignment plots for (default: 25)
 - `-q, --mapping_quality`: Mapping quality threshold (default: 20)
 - `-t, --threads`: Number of threads to use (default: 10)
-- `-c, --force`: Force overwrite of existing output files
+- `-c, --force`: Force overwrite of existing results (removes only `<out>/mapping` and `<out>/logs`)
 - `-k, --skip-mapping`: Skip mapping and coverage steps; reuse existing PAF and coverage files (implies `--force`)
 - `-x, --taxonomic-hierarchy`: Taxonomic hierarchy level (default: species)
 - `-p, --prefix`: Prefix for output files (default: None)
@@ -342,7 +343,7 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
    - If no environment exists yet, create one: `conda create -n ecmsd_env && conda activate ecmsd_env`
 
 2. **"No database folder provided"** or **database files missing**
-   - Build the database before running analysis: `ECMSD --create-db --db-folder /path/to/db`
+   - Analysis never builds the database; it exits with "Database not found. Run `ECMSD --create-db` first". Build it first: `ECMSD --create-db --db-folder /path/to/db`
    - Ensure sufficient disk space (~5–10 GB) and internet connectivity
    - If a previous database build was interrupted, re-run `--create-db` to complete it
 

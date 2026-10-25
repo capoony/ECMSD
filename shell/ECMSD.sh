@@ -73,33 +73,44 @@ force_rebuild="no"
 ###############################################################################
 #                             Argument Parsing                                #
 ###############################################################################
+need_value() {
+    [[ $# -ge 2 ]] || { echo "Error: option '$1' requires a value." >&2; exit 1; }
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
     -f | --fwd)
+        need_value "$@"
         fwd="$2"
         shift 2
         ;;
     -r | --rev)
+        need_value "$@"
         rev="$2"
         shift 2
         ;;
     -m | --merged)
+        need_value "$@"
         merged="$2"
         shift 2
         ;;
     -u | --cov-threshold)
+        need_value "$@"
         cov_threshold="$2"
         shift 2
         ;;
     -n | --top-n)
+        need_value "$@"
         top_n="$2"
         shift 2
         ;;
     -q | --mapping_quality)
+        need_value "$@"
         quality="$2"
         shift 2
         ;;
     -t | --threads)
+        need_value "$@"
         threads="$2"
         shift 2
         ;;
@@ -113,14 +124,17 @@ while [[ $# -gt 0 ]]; do
         shift
         ;;
     -x | --taxonomic-hierarchy | --taxonomic_hierarchy)
+        need_value "$@"
         taxonomic_hierarchy="$2"
         shift 2
         ;;
     -p | --prefix)
+        need_value "$@"
         prefix="$2"
         shift 2
         ;;
     -o | --out)
+        need_value "$@"
         output="$2"
         shift 2
         ;;
@@ -141,6 +155,7 @@ while [[ $# -gt 0 ]]; do
         shift
         ;;
     -d | --db-folder)
+        need_value "$@"
         db_folder="$2"
         shift 2
         ;;
@@ -153,6 +168,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "Starting ECMSD pipeline..."
+
+for pair in "-u:${cov_threshold}" "-q:${quality}" "-n:${top_n}" "-t:${threads}"; do
+    [[ "${pair#*:}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "Error: ${pair%%:*} requires a number, got '${pair#*:}'." >&2; exit 1; }
+done
+for pair in "-q:${quality}" "-n:${top_n}" "-t:${threads}"; do
+    [[ "${pair#*:}" =~ ^[0-9]+$ ]] || { echo "Error: ${pair%%:*} requires an integer, got '${pair#*:}'." >&2; exit 1; }
+done
+taxonomic_hierarchy="${taxonomic_hierarchy,,}"
+case "${taxonomic_hierarchy}" in
+subspecies | species | genus | family | order | class | phylum | kingdom | domain) ;;
+*)
+    echo "Error: -x must be one of subspecies, species, genus, family, order, class, phylum, kingdom, domain (got '${taxonomic_hierarchy}')." >&2
+    exit 1
+    ;;
+esac
 
 ###############################################################################
 #                        Resolve Script Directory                            #
@@ -214,10 +244,8 @@ if [[ -n "${db_folder}" ]]; then
     if [[ ! -f "${db_folder}/NCBI_taxdump/nodes.dmp" || \
           ! -f "${db_folder}/NCBI_taxdump/names.dmp" || \
           ! -f "${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz" ]]; then
-        echo "Database files missing in ${db_folder}. Generating missing files..."
-        # Never force a rebuild here: an analysis run must not discard a database
-        # that parallel jobs may be reading from.
-        bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" "no"
+        echo "Database not found. Run \`ECMSD --create-db\` first" >&2
+        exit 1
     fi
 
     REF="${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz"
@@ -279,8 +307,8 @@ if [[ "${skip_mapping}" == "yes" && -d "${Output}" ]]; then
     echo "Skipping mapping — reusing existing PAF in: ${Output}/mapping"
     rm -rf "${Output}/logs"
 elif [[ "${force}" == "yes" && -d "${Output}" ]]; then
-    echo "Removing existing output directory: ${Output}"
-    rm -rf "${Output}"
+    echo "Removing existing ECMSD output in: ${Output}"
+    rm -rf "${Output}/mapping" "${Output}/logs"
 elif [[ -d "${Output}" ]]; then
     echo "Output directory '${Output}' already exists. Use -c or --force to overwrite."
     exit 1
@@ -305,7 +333,7 @@ mkdir -p "${Output}/logs"
 ###############################################################################
 run_mapping() {
     # Accepts one or more read file paths as arguments
-    echo "Running minimap2 mapping for: $*"
+    echo "Running minimap2 mapping for: $*" >&2
     minimap2 \
         -x sr \
         --secondary=no \
@@ -313,8 +341,8 @@ run_mapping() {
         2> "${Output}/logs/minimap2.log" |
         awk -v Q="${quality}" '$12 >= Q {print}'
 
-    echo "Minimap2 log:"
-    cat "${Output}/logs/minimap2.log"
+    echo "Minimap2 log:" >&2
+    cat "${Output}/logs/minimap2.log" >&2
 }
 
 ###############################################################################
@@ -334,23 +362,15 @@ if [[ "${skip_mapping}" == "yes" ]]; then
         exit 1
     fi
 else
-    if [[ -n "${fwd}" ]]; then
-        if [[ -z "${rev}" || "${rev}" == "no" ]]; then
-            echo "Running single-end mapping..."
-            run_mapping "${fwd}" | gzip >"${PAF}.gz"
-        else
-            echo "Running paired-end mapping..."
-            run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
-        fi
-    fi
-
-    if [[ -n "${merged}" && "${merged}" != "no" ]]; then
-        if [[ ! -f "${merged}" ]]; then
-            echo "Error: Merged reads file '${merged}' does not exist."
-            exit 1
-        fi
+    if [[ -n "${merged}" ]]; then
         echo "Running mapping on merged reads..."
-        run_mapping "${merged}" | gzip >>"${PAF}.gz"
+        run_mapping "${merged}" | gzip >"${PAF}.gz"
+    elif [[ -z "${rev}" ]]; then
+        echo "Running single-end mapping..."
+        run_mapping "${fwd}" | gzip >"${PAF}.gz"
+    else
+        echo "Running paired-end mapping..."
+        run_mapping "${fwd}" "${rev}" | gzip >"${PAF}.gz"
     fi
 fi
 
@@ -371,68 +391,7 @@ if [[ "${skip_mapping}" == "yes" && -f "${COVERAGE_OUT}" ]]; then
     echo "Skipping coverage calculation — reusing existing ${COVERAGE_OUT}"
 else
     echo "Calculating per-reference coverage..."
-    python3 - <<'PYEOF' "${PAF}.gz" "${COVERAGE_OUT}" "${quality}"
-import sys
-import gzip
-import math
-from collections import defaultdict
-
-paf_file = sys.argv[1]
-out_file = sys.argv[2]
-min_mapq = int(sys.argv[3])
-
-diff_arrays = defaultdict(lambda: defaultdict(int))
-ref_lengths = {}
-seen_read_ref = set()
-
-opener = gzip.open if paf_file.endswith(".gz") else open
-
-with opener(paf_file, "rt") as fh:
-    for line in fh:
-        parts = line.strip().split("\t")
-        if len(parts) < 12:
-            continue
-        read_name = parts[0]
-        ref_name  = parts[5]
-        ref_len   = int(parts[6])
-        ref_start = int(parts[7])
-        ref_end   = int(parts[8])
-        mapq      = int(parts[11])
-        ref_lengths[ref_name] = ref_len
-
-        if mapq < min_mapq:
-            continue
-
-        key = (read_name, ref_name)
-        if key in seen_read_ref:
-            continue
-        seen_read_ref.add(key)
-
-        diff_arrays[ref_name][ref_start] += 1
-        diff_arrays[ref_name][ref_end]   -= 1
-
-with open(out_file, "w") as out:
-    out.write("reference\tref_length\tmean_coverage\tstd_coverage\tpct_covered\n")
-    for ref_name, ref_len in sorted(ref_lengths.items()):
-        diff  = diff_arrays[ref_name]
-        depth = 0
-        covered = 0
-        sum_d   = 0
-        sum_sq_d = 0
-        for pos in range(ref_len):
-            depth    += diff.get(pos, 0)
-            sum_d    += depth
-            sum_sq_d += depth * depth
-            if depth > 0:
-                covered += 1
-        mean_cov    = sum_d / ref_len if ref_len > 0 else 0
-        variance    = (sum_sq_d / ref_len - mean_cov ** 2) if ref_len > 0 else 0
-        std_cov     = math.sqrt(max(variance, 0.0))
-        pct_covered = (covered / ref_len * 100) if ref_len > 0 else 0
-        out.write(f"{ref_name}\t{ref_len}\t{mean_cov:.2f}\t{std_cov:.2f}\t{pct_covered:.2f}\n")
-
-print(f"Coverage statistics written to: {out_file}")
-PYEOF
+    python3 "${SCRIPT_DIR}/coverage.py" "${PAF}.gz" "${COVERAGE_OUT}" "${quality}"
 fi
 
 ###############################################################################
@@ -444,7 +403,7 @@ if [[ -n "${prefix}" ]]; then
 fi
 
 echo "Parsing PAF and assigning taxonomy..."
-python "${SCRIPT_DIR}/LinkTaxonomy.py" \
+python3 "${SCRIPT_DIR}/LinkTaxonomy.py" \
     --Nodes "${NODES}" \
     --Names "${NAMES}" \
     --PAF "${PAF}.gz" \
@@ -465,7 +424,7 @@ if [[ ! -f "${summary_file}" ]]; then
 fi
 
 if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
-    echo "Warning: No references passed the coverage threshold (--cov-threshold ${cov_threshold}). Skipping plots."
+    echo "Warning: No references passed the coverage threshold (--cov-threshold ${cov_threshold}). Plots will be empty."
 fi
 
 echo "Plotting results..."

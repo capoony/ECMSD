@@ -25,18 +25,23 @@ jobs:
 
       - name: Update version in ECMSD.sh from tag
         if: steps.tag.outputs.new_tag != ''
+        env:
+          TAG: ${{ steps.tag.outputs.new_tag }}
         run: |
-          TAG=${{ steps.tag.outputs.new_tag }}
           VERSION=${TAG#v}
           sed -i "s/^version=.*/version=\"$VERSION\"/" shell/ECMSD.sh
 
       - name: Commit ECMSD.sh version back to main
         if: steps.tag.outputs.new_tag != ''
+        env:
+          AUTHOR: ${{ github.event.head_commit.author.name }}
+          EMAIL: ${{ github.event.head_commit.author.email }}
+          NEW_TAG: ${{ steps.tag.outputs.new_tag }}
         run: |
-          git config user.name "${{ github.event.head_commit.author.name }}"
-          git config user.email "${{ github.event.head_commit.author.email }}"
+          git config user.name "$AUTHOR"
+          git config user.email "$EMAIL"
           git add shell/ECMSD.sh
-          git commit -m "chore: sync version to ${{ steps.tag.outputs.new_tag }} [skip ci]" || true
+          git commit -m "chore: sync version to $NEW_TAG [skip ci]" || true
           git push origin HEAD:main
 
       - name: Create GitHub Release
