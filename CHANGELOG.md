@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased
+## v1.3.3 — Audit fixes (2026-10-25)
 
 ### Changed
 
