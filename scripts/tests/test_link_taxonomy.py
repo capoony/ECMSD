@@ -103,6 +103,43 @@ class LoadBestHitsTests(unittest.TestCase):
             os.remove(path)
 
 
+class EvidenceModeTests(unittest.TestCase):
+    """load_evidence and load_compatible_hits."""
+
+    def test_load_evidence_returns_only_credible_references_with_their_read_counts(self):
+        path = _tmp_file(["reference\ttaxon_name\tdiscriminatory_reads\tcredible\treason",
+                          "101\tA\t40\tyes\tpass", "102\tB\t3\tno\tfew_discriminatory_reads",
+                          "201\tC\t25\tyes\tpass"])
+        try:
+            self.assertEqual(lt.load_evidence(path), {"101": 40, "201": 25})
+        finally:
+            os.remove(path)
+
+    def test_load_evidence_rejects_other_tables(self):
+        path = _tmp_file(["reference\tref_length\tmean_coverage", "101\t100\t2"])
+        try:
+            with self.assertRaises(SystemExit):
+                lt.load_evidence(path)
+        finally:
+            os.remove(path)
+
+    def test_load_compatible_hits_groups_references_per_read(self):
+        line = lambda r, ref, mq: "\t".join([r, "50", "0", "50", "+", ref, "1000", "0", "50", "50", "50", str(mq)])
+        path = _tmp_file([line("a", "101", 0), line("a", "102", 3), line("a", "101", 0),
+                          line("b", "201", 0), "log line"])
+        try:
+            reads = lt.load_compatible_hits(path, min_mapq=0)
+            self.assertEqual(reads["a"][1], ["101", "102"])
+            self.assertEqual(reads["b"][1], ["201"])
+            # MAPQ filter is on the best MAPQ among a read's compatible alignments
+            self.assertEqual(set(lt.load_compatible_hits(path, min_mapq=2)), {"a"})
+        finally:
+            os.remove(path)
+
+    def test_there_is_no_lowest_common_ancestor_assignment(self):
+        self.assertFalse(hasattr(lt, "lowest_common_ancestor"))
+
+
 class TaxonTraceTests(unittest.TestCase):
 
     def setUp(self):

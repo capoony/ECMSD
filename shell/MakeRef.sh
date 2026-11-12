@@ -10,8 +10,8 @@ threads=$3
 force_rebuild=${4:-no}
 
 # activate the conda environment
-#eval "$(conda shell.bash hook)"
-#conda activate ${WD}/scripts/conda_env
+eval "$(conda shell.bash hook)"
+conda activate /media/inter/pipelines/ECMSD_old/scripts/conda_env
 
 # The only three files the analysis pipeline reads from the database folder
 # (see ECMSD.sh: REF, NODES, NAMES). Everything else produced below is a build

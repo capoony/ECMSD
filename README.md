@@ -31,11 +31,12 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 
 ### Phase 2 — Per-sample analysis
 
-1. **Sequence Mapping**: Aligns input reads to the mitochondrial reference using minimap2
-2. **Quality Filtering**: Filters alignments based on mapping quality threshold
-3. **Coverage Calculation**: Computes per-reference breadth of coverage; references below the threshold are discarded
-4. **Taxonomic Assignment**: Links aligned sequences to taxonomic information using NCBI taxonomy
-5. **Visualization**: Generates summary plots and per-reference alignment coverage plots
+1. **Stage 1 — liberal screen**: Maps all reads to the mitochondrial reference with minimap2 using sensitive seeds (`-k 17 -w 7`) and relaxed chaining (`-n 1 -m 20 -s 20`), without MAPQ filtering (MAPQ 0 is kept) and without base-level alignment. Every read with at least one alignment is a candidate; the candidates are extracted unchanged from the original FASTQ file(s) (pairs stay together)
+2. **Stage 2 — accurate mapping**: Remaps only the candidates to the complete database with base-level alignment (`-c`) and secondary alignments (`--secondary=yes -N 20`). The output is streamed straight into the best-alignment selection, so the very large all-alignments file is not stored. For each read all alignments with the best alignment score (`AS`) are kept (ties included), never ranked by MAPQ
+3. **Reference Evidence**: For each reference, separates reads that are *compatible* with it (it has the best `AS`, possibly tied with other references) from reads that *discriminate* it from all other references. A reference is only reported when enough discriminatory reads, spread over enough of its genome, support it (see [Taxonomic assignment](#taxonomic-assignment))
+4. **Coverage Calculation**: Computes per-reference breadth of coverage from all compatible alignments; references below the threshold are discarded
+5. **Taxonomic Assignment**: Links reads to taxonomic information using NCBI taxonomy; only credible references are reported, always at the level of the reference (never at a higher taxonomic level); a read compatible with several credible references is assigned to the one with the most discriminatory reads
+6. **Visualization**: Generates summary plots and per-reference alignment coverage plots
 
 ## Requirements
 
@@ -100,6 +101,17 @@ bash shell/install.sh
 ```
 
 This installs all required dependencies (minimap2, bbmap, R, Python packages, etc.) into the active conda environment and registers the `ECMSD` command.
+
+**Alternative — let `install.sh` create a new local environment**
+
+Instead of steps 2 and 3, you can give `install.sh` a path with `--prefix` (`-p`). It creates a new conda environment at that location (e.g. on a shared project drive), installs all dependencies and registers `ECMSD` there. No active conda environment is needed:
+
+```bash
+bash shell/install.sh --prefix /path/to/ecmsd_env
+conda activate /path/to/ecmsd_env
+```
+
+If the path is already a conda environment, ECMSD is (re)installed into it. A non-empty directory that is not a conda environment is refused.
 
 </details>
 
@@ -235,9 +247,18 @@ ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
 #### Optional Arguments
 
 - `-r, --rev`: Path to the reverse FASTQ file (for paired-end data; requires `--fwd`)
-- `-u, --cov-threshold`: Minimum percentage of a reference covered by reads to retain it (default: 5)
+- `-u, --cov-threshold`: Minimum percentage of a reference covered by reads to retain it (default: 25; see [Coverage-based Reference Filtering](#coverage-based-reference-filtering---cov-threshold) for low-depth samples)
 - `-n, --top-n`: Number of top references to generate per-reference alignment plots for (default: 25)
-- `-q, --mapping_quality`: Mapping quality threshold (default: 20)
+- `-q, --mapping_quality`: Drop reads whose best alignments all have a lower MAPQ (default: 0, i.e. no MAPQ filtering; see [Mapping Quality](#mapping-quality))
+- `--seed-k`: minimap2 k-mer size, both stages (default: 17)
+- `--seed-w`: minimap2 minimizer window size, both stages (default: 7)
+- `--min-chain-score`: minimap2 minimal chaining score `-m`, both stages (default: 20). Higher values make Stage 1 stricter and Stage 2 faster; see [Two-stage mapping parameters](#two-stage-mapping-parameters)
+- `--max-alns`: Stage 2 `minimap2 -N`, maximum number of secondary alignments per read (default: 20)
+- `--min-disc-reads`: A reference is only reported when at least this many reads discriminate it from all other references (default: 20)
+- `--min-disc-breadth`: ... and these reads cover at least this % of the reference (default: 5)
+- `--min-disc-evenness`: ... and are spread over the reference with at least this evenness, 0-1 (default: 0.5)
+- `--min-aln-len`: Minimum alignment length in bp of a read that counts as discriminatory evidence (default: 20). Lower it for very short reads, raise it to be stricter
+- `--keep-all-alignments`: Also keep every Stage 2 alignment as `Mito_stage2_all_alignments.paf.gz` and `Mito_stage2_alignments.tsv.gz` (large, and adds several minutes on deep samples)
 - `-t, --threads`: Number of threads to use (default: 10)
 - `-c, --force`: Force overwrite of existing results (removes only `<out>/mapping` and `<out>/logs`)
 - `-k, --skip-mapping`: Skip mapping and coverage steps; reuse existing PAF and coverage files (implies `--force`)
@@ -284,7 +305,12 @@ The pipeline generates the following output structure:
 ```text
 output_directory/
 ├── mapping/
-│   ├── Mito.paf.gz                              # Compressed alignment results
+│   ├── Mito.paf.gz                              # Best Stage 2 alignment per read
+│   ├── Mito_stage1_hits.txt                     # Names of reads with a Stage 1 alignment
+│   ├── Mito_stage1_candidates[_R1|_R2].fastq.gz # Candidate reads, input of Stage 2
+│   ├── Mito_stage2_all_alignments.paf.gz        # Only with --keep-all-alignments
+│   ├── Mito_stage2_alignments.tsv.gz            # Only with --keep-all-alignments
+│   ├── Mito_reference_evidence.txt              # Compatible and discriminatory evidence per reference
 │   ├── Mito_coverage.txt                        # Per-reference coverage statistics
 │   ├── Mito_summary.txt                         # Taxonomic assignment per read
 │   ├── Mito_summary.ref_summary.txt             # Ranked reference summary for plotting
@@ -293,12 +319,16 @@ output_directory/
 │   ├── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot
 │   └── alignment_plots/                         # Per-reference coverage and depth plots
 └── logs/
-    └── minimap2.log                             # Mapping log
+    ├── minimap2_stage1.log                      # Stage 1 mapping log
+    └── minimap2_stage2.log                      # Stage 2 mapping log
 ```
 
 ### Output File Descriptions
 
-- **Mito.paf.gz**: Compressed PAF format alignment file containing all mitochondrial sequence alignments
+- **Mito.paf.gz**: Compressed PAF with, for each read, the alignments to all references that tie for its best `AS` (the references the read is compatible with). Each line carries the extra tags `nc` (number of compatible references), `dm` (`AS` margin to the best lower-scoring reference, if one was reported) and `na` (number of alignments minimap2 reported for the read). Evidence, coverage, taxonomy and plots are based on this file
+- **Mito_reference_evidence.txt**: One row per reference with read counts (`compatible_reads`, `discriminatory_reads`, `weak_unique_reads`, `shared_reads`, `discriminatory_at_limit`), breadth, depth and evenness of the compatible and of the discriminatory reads, whether the reference is `credible` and, if not, the `reason`
+- **Mito_stage1_hits.txt**, **Mito_stage1_candidates*.fastq.gz**: Stage 1 output. Hit names (any MAPQ) and the candidate reads extracted from the original FASTQ file(s)
+- **Mito_stage2_all_alignments.paf.gz**, **Mito_stage2_alignments.tsv.gz** (only with `--keep-all-alignments`): all Stage 2 alignments, including secondary ones (`tp:A:S`). The table lists reference, coordinates, aligned length, MAPQ, `tp`, `AS`, `NM`, whether the alignment was chosen as best and its `AS` difference to the best alignment of the read, so ambiguous reads can be inspected
 - **Mito_coverage.txt**: Per-reference coverage statistics — columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
 - **Mito_summary.txt**: Tab-separated file with taxonomic assignments and read counts per read
 - **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `subspecies_name`, `read_count` (`subspecies_name` is `NA` for references not resolved below species level)
@@ -306,7 +336,7 @@ output_directory/
 - **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
 - **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
 - **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references. Titles and file names use the label for the rank requested with `-x`, so a run at species level never shows a subspecies name
-- **minimap2.log**: Detailed minimap2 alignment log
+- **minimap2_stage1.log**, **minimap2_stage2.log**: Detailed minimap2 logs of the two stages
 
 ## Parameters Explanation
 
@@ -315,6 +345,8 @@ output_directory/
 After mapping, ECMSD calculates per-reference breadth of coverage from the PAF file. For each reference, it computes the percentage of reference positions covered by at least one read (`pct_covered`). Only references where `pct_covered ≥ --cov-threshold` are passed to the taxonomic assignment step.
 
 This replaces the previous RMUS-based filtering. Coverage breadth is a more direct and interpretable measure for distinguishing authentic mitochondrial hits (which should show broad, even coverage across the genome) from mapping artifacts or NUMTs (which tend to pile up on a small region of the reference).
+
+The default is 25%. This threshold is on absolute breadth, and breadth grows with sequencing depth, so a species that is present at low abundance can fall below it in a shallow sample. On the 1.09 M read test sample (*D. melanogaster* plus a rare *G. bimaculatus*), 25% reports exactly these two species. Randomly subsampled to 10% of the reads, *G. bimaculatus* is still credible by its discriminatory reads (27 reads, 19% breadth) but is dropped by the 25% threshold; at 3% and 1% it has too few discriminatory reads to be reported at any threshold. In that range the discriminatory-evidence criteria (`--min-disc-*`) already reject the weak candidates that 25% is needed for at full depth, so for shallow samples a lower `--cov-threshold` (for example 5-10) is reasonable. `Mito_reference_evidence.txt` shows both values for every reference, so a borderline result can be checked.
 
 The `Mito_coverage.txt` output file contains the full per-reference statistics for inspection.
 
@@ -328,7 +360,24 @@ Skips the minimap2 mapping and coverage calculation steps and reuses the existin
 
 ### Mapping Quality
 
-The mapping quality threshold filters alignments based on their reliability. Higher values increase stringency but may reduce sensitivity for divergent sequences.
+MAPQ is low (often 0) whenever a read fits several closely related mitogenomes equally well, even if the alignment is correct. ECMSD therefore does not filter on MAPQ by default (`-q 0`) and chooses between references by alignment score (`AS`). `-q` can still be used to drop reads whose best alignments all have a lower MAPQ, which discards ambiguous reads.
+
+### Taxonomic assignment
+
+Closely related mitogenomes share many reads. A species that is not in the sample but is almost identical to one that is can therefore reach a high breadth of coverage on reads that do not tell the two apart, so breadth alone cannot separate it from a species that is present. ECMSD thus counts, for each reference, two kinds of reads:
+
+- **compatible**: the reference has the best alignment score (`AS`) for the read, including reads that tie with other references;
+- **discriminatory**: the reference is the only one with the best `AS`, by at least 10 `AS` points over every competing reference that was reported, and the alignment is adequate (at least `--min-aln-len` bp, 20 by default, at least half of the read aligned, at least 90% identity). Short chance matches are `weak_unique_reads`, not evidence.
+
+A reference is reported (`credible`) when it has at least `--min-disc-reads` discriminatory reads that cover at least `--min-disc-breadth` % of it and are spread over it with an evenness (normalised Shannon entropy over 20 equal windows) of at least `--min-disc-evenness`. No threshold depends on how abundant other species are, so a rare species with well-spread discriminatory reads is kept. Reads shared between references still count towards the coverage of every credible reference they are compatible with, and a read that is compatible with several credible references is assigned to the one with the most discriminatory reads (ties: the first one reported). Only credible references are reported, always as the reference itself; nothing is reported at a higher taxonomic level. If a sample only contains shared reads, no reference is credible and nothing is reported.
+
+Limits: minimap2 reports at most `--max-alns` (+1) alignments per read, chosen before base-level alignment, so a competing reference may not be reported for a read. A unique best alignment is therefore only provisional; `discriminatory_at_limit` in `Mito_reference_evidence.txt` counts discriminatory reads for which the limit was reached. Species that are credible only because of reads at the limit, or because of a few reads, should be treated with caution. The thresholds are defaults chosen on one test data set and may need adjusting.
+
+### Two-stage mapping parameters
+
+The `sr` preset requires two minimizers per chain (`-n 2`), a chaining score of 25 (`-m 25`) and a peak score of 40 (`-s 40`). Reads shorter than about 30 bp are almost never mapped with these. Both stages use `-n 1 -m 20 -s 20` together with `-k 17 -w 7` instead.
+
+The chaining score `-m` is what controls how many reads Stage 1 passes on. On the 1.09 M read test sample (Drosophila melanogaster and Gryllus bimaculatus reads against the full RefSeq mitochondrial database), `-m 10` passed 85% of all reads, of which 14% could only align with a very low alignment score (AS < 40), which made Stage 2 slow (16.6 M alignments). `-m 20` passes 59% of the reads, none of them with AS < 40, and still keeps 99% of the *D. melanogaster* reads, 99% of the reads with AS >= 60 and 94% of the *G. bimaculatus* reads (98.7% of those with an alignment of AS >= 40). `-n` and `-s` have no effect once `-m` is 20 or higher. Use `--min-chain-score 18` to recover a few percent more of the weakest hits (about 97% of *G. bimaculatus*) at the cost of 5 percentage points more candidates, or 25 (the preset value) for a stricter screen that loses about 7% of the *G. bimaculatus* reads.
 
 ### Taxonomic Hierarchy
 
@@ -341,6 +390,7 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 1. **"No conda environment is active"**
    - Activate a conda environment before running `install.sh`: `conda activate <your-env>`
    - If no environment exists yet, create one: `conda create -n ecmsd_env && conda activate ecmsd_env`
+   - Or let the script create one at a path of your choice: `bash shell/install.sh --prefix /path/to/ecmsd_env`
 
 2. **"No database folder provided"** or **database files missing**
    - Analysis never builds the database; it exits with "Database not found. Run `ECMSD --create-db` first". Build it first: `ECMSD --create-db --db-folder /path/to/db`

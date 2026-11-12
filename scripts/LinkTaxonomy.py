@@ -27,6 +27,9 @@ parser.add_option("--MapQuality", dest="MapQuality",
                   help="Minimum mapping quality for primary alignments (default: 20)",
                   default=20, type="int")
 
+parser.add_option("--Evidence", dest="Evidence",
+                  help="Reference evidence table written by assess_references.py. When given, only references marked credible are reported, and each read is assigned to the credible reference it is compatible with (any equally best-scoring alignment in the PAF); a read compatible with several credible references is assigned to the one with the most discriminatory reads")
+
 (options, args) = parser.parse_args()
 
 parents = {}
@@ -154,6 +157,47 @@ def load_best_hits(paf_path, min_mapq):
     return winners
 
 
+def load_evidence(path):
+    """References marked credible in the table written by assess_references.py.
+    Returns a dict: reference -> number of discriminatory reads."""
+    credible = {}
+    with open(path, "r") as fh:
+        header = next(fh).rstrip("\n").split("\t")
+        try:
+            i_ref, i_ok = header.index("reference"), header.index("credible")
+            i_disc = header.index("discriminatory_reads")
+        except ValueError:
+            sys.exit(f"{path} is not a reference evidence table written by assess_references.py")
+        for line in fh:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) > max(i_ref, i_ok, i_disc) and parts[i_ok] == "yes":
+                credible[parts[i_ref]] = int(parts[i_disc])
+    return credible
+
+
+def load_compatible_hits(paf_path, min_mapq):
+    """Per read: the PAF fields of its first alignment and the distinct references of all
+    its compatible (equally best-scoring) alignments, as written by select_best_alignments.py.
+    A read is kept when the best MAPQ of its alignments reaches min_mapq.
+    Returns a dict: read_name -> (fields, [reference, ...]).
+    """
+    reads = {}
+    with load_data(paf_path) as fh:
+        for line in fh:
+            fields = line.rstrip().split("\t")
+            if len(fields) < 12:
+                continue
+            mapq = int(fields[11])
+            entry = reads.get(fields[0])
+            if entry is None:
+                reads[fields[0]] = [fields, [fields[5]], mapq]
+            else:
+                if fields[5] not in entry[1]:
+                    entry[1].append(fields[5])
+                entry[2] = max(entry[2], mapq)
+    return {read: (e[0], e[1]) for read, e in reads.items() if e[2] >= min_mapq}
+
+
 def run():
     if options.TaxonomicHierarchy not in RANK_INDEX:
         sys.exit(f"Unknown rank '{options.TaxonomicHierarchy}'. Choose from: {', '.join(RANKS)}")
@@ -164,8 +208,21 @@ def run():
     print(
         f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
 
+    credible = None
+    if options.Evidence:
+        credible = load_evidence(options.Evidence)
+        passing_taxids &= set(credible)
+        print(f"References with credible discriminatory evidence: {len(credible)}; "
+              f"passing the coverage threshold as well: {len(passing_taxids)}")
+
     print("Loading PAF alignments...")
-    best_hits = load_best_hits(options.PAF, options.MapQuality)
+    if credible is None:
+        best_hits = load_best_hits(options.PAF, options.MapQuality)
+        hits = ((read, fields, [fields[5]]) for read, fields in best_hits.items())
+    else:
+        compatible = load_compatible_hits(options.PAF, options.MapQuality)
+        print(f"PAF loaded: {len(compatible)} reads passed MQ filter.")
+        hits = ((read, fields, refs) for read, (fields, refs) in compatible.items())
 
     # Count reads per reference (ref_name, taxId) for ranking
     ref_read_counts = d(int)
@@ -173,41 +230,55 @@ def run():
     ref_to_name = {}
     ref_to_species = {}
     ref_to_subspecies = {}
+    path_cache = {}
+    n_assigned = n_shared = n_unassigned = 0
+
+    def name_path_of(taxId):
+        if taxId not in path_cache:
+            node_path, name_path_str = taxon_trace(taxId)
+            rank_name = dict(zip(node_path.split("|"), name_path_str.split("|")))
+            path_cache[taxId] = [rank_name.get(rank, "NA") for rank in RANKS]
+        return path_cache[taxId]
 
     with open(options.OUT+".txt", 'wt') as export:
         export.write(
             "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
-        for seqId, lines in best_hits.items():
-            ref_name = lines[5]
-            taxId = ref_name
-
-            if taxId not in passing_taxids:
+        for seqId, lines, refs in hits:
+            members = [r for r in refs if r in passing_taxids and r in names]
+            if not members:
+                n_unassigned += 1
                 continue
+            # A read compatible with several credible references is assigned to the one with
+            # the most discriminatory reads (ties: the first reported); only credible
+            # references are ever reported, never a higher taxonomic level
+            if len(members) == 1:
+                taxId = members[0]
+            else:
+                taxId = max(members, key=lambda r: credible[r])
+                n_shared += 1
+            n_assigned += 1
 
-            if taxId not in names:
-                continue
-
-            node_path, name_path_str = taxon_trace(taxId)
-            rank_name = dict(zip(node_path.split("|"), name_path_str.split("|")))
-            name_path = []
-            for rank in RANKS:
-                if rank in rank_name:
-                    name_path.append(rank_name[rank])
-                else:
-                    name_path.append("NA")
-
+            name_path = name_path_of(taxId)
             Tax = "\t".join(["_".join(x.split()) for x in name_path])
             export.write(seqId + "\t" + taxId + "\t" +
                          lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
 
-            ref_read_counts[ref_name] += 1
-            ref_to_taxid[ref_name] = taxId
-            label = fallback_label(name_path, options.TaxonomicHierarchy.lower())
-            ref_to_name[ref_name] = "_".join(label.split())
-            species_label = name_path[7] if name_path[7] != "NA" else "Unknown sp"
-            ref_to_species[ref_name] = "_".join(species_label.split())
-            subspecies_label = name_path[8] if name_path[8] != "NA" else "NA"
-            ref_to_subspecies[ref_name] = "_".join(subspecies_label.split())
+            for ref_name in members:
+                ref_read_counts[ref_name] += 1
+                if ref_name not in ref_to_taxid:
+                    ref_path = name_path_of(ref_name)
+                    ref_to_taxid[ref_name] = ref_name
+                    label = fallback_label(ref_path, options.TaxonomicHierarchy.lower())
+                    ref_to_name[ref_name] = "_".join(label.split())
+                    species_label = ref_path[7] if ref_path[7] != "NA" else "Unknown sp"
+                    ref_to_species[ref_name] = "_".join(species_label.split())
+                    subspecies_label = ref_path[8] if ref_path[8] != "NA" else "NA"
+                    ref_to_subspecies[ref_name] = "_".join(subspecies_label.split())
+
+    if credible is not None:
+        print(f"Reads assigned: {n_assigned}, of which {n_shared} are compatible with several credible "
+              f"references and were assigned to the one with the most discriminatory reads; reads "
+              f"without a credible reference: {n_unassigned}")
 
     # Write ranked reference summary for plotting
     with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:

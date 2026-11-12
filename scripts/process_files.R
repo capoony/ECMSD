@@ -29,10 +29,11 @@ if (!file.exists(summary_file)) {
 
 data <- as.data.frame(data.table::fread(summary_file, sep = "\t", header = TRUE))
 
-# Keep only primary alignments (MappingQuality > 0; secondaries always have MQ=0
-# in minimap2) and deduplicate so each read is counted exactly once.
+# Mito_summary.txt holds one row per read (its best Stage 2 alignment, chosen by
+# alignment score). MappingQuality is NOT used to drop rows here: reads that map
+# equally well to closely related mitogenomes have MAPQ 0 and must still be
+# counted. Deduplicate so each read is counted exactly once.
 data <- data %>%
-  filter(MappingQuality > 0) %>%
   distinct(SeqID, .keep_all = TRUE)
 
 # ---------------------------------------------------------------------------

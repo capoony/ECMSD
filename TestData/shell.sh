@@ -10,7 +10,7 @@
 
 # Set the working directory (parent folder containing TestData/)
 WD="<path_to_your_working_directory>"
-
+WD=/media/inter/pipelines/ECMSD/TestData
 # Set the path to the database folder (must be created first with --create-db)
 DB="<path_to_your_db_folder>"
 
