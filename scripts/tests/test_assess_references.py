@@ -106,6 +106,53 @@ class MetricTests(unittest.TestCase):
         self.assertAlmostEqual(m["disc_breadth"], 10.0)
 
 
+    def test_identity_pools_discriminatory_reads_only(self):
+        # A: 2 discriminatory reads, NM 0 and NM 2 over 50 bp each; 2 shared reads with NM 5
+        lines = [aln("d0", "A", 0, dm=20), aln("d1", "A", 50, dm=20, NM=2)]
+        for i in range(2):
+            lines += [aln(f"s{i}", "A", 500, nc=2, NM=5), aln(f"s{i}", "B", 500, nc=2, NM=5)]
+        refs, _ = collect(lines)
+        m, _, _ = ar.judge(refs["A"], 1, 0, 0)
+        self.assertAlmostEqual(m["disc_ident"], 1 - 2 / 100)
+        self.assertAlmostEqual(m["disc_exact"], 0.5)
+        m, _, _ = ar.judge(refs["B"], 1, 0, 0)
+        self.assertEqual((m["disc_ident"], m["disc_exact"]), (None, None))
+
+    def test_identity_skips_reads_without_nm(self):
+        nm_missing = aln("x", "A", 0, dm=20).replace("NM:i:0\t", "")
+        refs, _ = collect([nm_missing])
+        self.assertEqual((refs["A"].disc, refs["A"].dn), (1, 0))
+
+    def test_pcr_duplicates_counted_once(self):
+        # d0 and its copy d0b: same reference, start, end and strand; d1 elsewhere
+        lines = [aln("d0", "A", 0, dm=20), aln("d0b", "A", 0, dm=20), aln("d1", "A", 100, dm=20)]
+        refs, stats = collect(lines)
+        self.assertEqual((refs["A"].compat, refs["A"].disc, refs["A"].dups, stats["duplicates"]), (2, 2, 1, 1))
+        m, _, _ = ar.judge(refs["A"], 1, 0, 0)
+        self.assertAlmostEqual(m["dup_frac"], 1 / 3)
+        refs, stats = collect(lines, dedup=False)
+        self.assertEqual((refs["A"].disc, refs["A"].dups, stats["duplicates"]), (3, 0, 0))
+
+    def test_shared_reads_dedup_on_all_compatible_positions(self):
+        # same position on A, different position on B: not a duplicate
+        lines = [aln("s0", "A", 0, nc=2), aln("s0", "B", 0, nc=2),
+                 aln("s1", "A", 0, nc=2), aln("s1", "B", 300, nc=2),
+                 aln("s2", "A", 0, nc=2), aln("s2", "B", 300, nc=2)]
+        refs, _ = collect(lines)
+        self.assertEqual((refs["A"].compat, refs["A"].dups, refs["B"].compat, refs["B"].dups), (2, 1, 2, 1))
+
+    def test_edit_distance_decline(self):
+        self.assertEqual(ar.edit_distance_decline([700, 200, 60, 20]), 1.0)
+        self.assertEqual(ar.edit_distance_decline([5, 0, 0, 0]), 1.0)
+        self.assertAlmostEqual(ar.edit_distance_decline([200, 400, 300, 0]), 400 / 600)  # +200, -100, -300
+        self.assertIsNone(ar.edit_distance_decline([0, 0, 0, 0]))
+        lines = [aln("d0", "A", 0, dm=20, NM=1), aln("d1", "A", 50, dm=20, NM=1), aln("d2", "A", 100, dm=20, NM=9)]
+        refs, _ = collect(lines)
+        self.assertEqual(refs["A"].dhist, [0, 2, 0, 0])  # NM above 3 is left out
+        m, _, _ = ar.judge(refs["A"], 1, 0, 0)
+        self.assertAlmostEqual(m["decline"], 0.5)
+
+
 class JudgeTests(unittest.TestCase):
 
     def reads_for(self, n, spread):
@@ -171,6 +218,9 @@ class OutputTests(unittest.TestCase):
         self.assertEqual((row["7"]["credible"], row["7"]["reason"]), ("yes", "pass"))
         self.assertEqual(row["8"]["credible"], "no")
         self.assertEqual(row["8"]["taxon_name"], "NA")
+        self.assertEqual((row["7"]["discriminatory_identity"], row["7"]["discriminatory_exact"],
+                          row["7"]["edit_distance_decline"]), ("1.0000", "1.000", "1.000"))
+        self.assertEqual((row["8"]["discriminatory_identity"], row["8"]["edit_distance_decline"]), ("NA", "NA"))
 
 
 def self_lines():

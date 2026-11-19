@@ -29,12 +29,17 @@ if (!file.exists(summary_file)) {
 
 data <- as.data.frame(data.table::fread(summary_file, sep = "\t", header = TRUE))
 
-# Mito_summary.txt holds one row per read (its best Stage 2 alignment, chosen by
-# alignment score). MappingQuality is NOT used to drop rows here: reads that map
-# equally well to closely related mitogenomes have MAPQ 0 and must still be
-# counted. Deduplicate so each read is counted exactly once.
+# Mito_summary.txt holds one row per read and assigned reference. A read shared by
+# several credible references has one row per reference, and Weight is its share
+# (their discriminatory reads / the sum); the weights of a read sum to 1.
+# MappingQuality is NOT used to drop rows here: reads that map equally well to
+# closely related mitogenomes have MAPQ 0 and must still be counted.
+# Files without Weight (older versions) count every read once.
+if (!("Weight" %in% names(data))) {
+  data <- data %>% distinct(SeqID, .keep_all = TRUE) %>% mutate(Weight = 1)
+}
 data <- data %>%
-  distinct(SeqID, .keep_all = TRUE)
+  distinct(SeqID, TaxID, .keep_all = TRUE)
 
 # ---------------------------------------------------------------------------
 # Resolve the requested rank.
@@ -94,9 +99,9 @@ data[[Taxon]] <- resolved
 
 # Summarize read counts by taxon and length
 data_sub <- data %>%
-  select(!!sym(Taxon), Length) %>%
+  select(!!sym(Taxon), Length, Weight) %>%
   group_by(!!sym(Taxon), Length) %>%
-  summarise(TotalReads = n(), .groups = "drop") %>%
+  summarise(TotalReads = round(sum(Weight), 2), .groups = "drop") %>%
   arrange(desc(TotalReads))
 
 # Save summarized table

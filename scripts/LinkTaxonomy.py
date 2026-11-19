@@ -28,7 +28,7 @@ parser.add_option("--MapQuality", dest="MapQuality",
                   default=20, type="int")
 
 parser.add_option("--Evidence", dest="Evidence",
-                  help="Reference evidence table written by assess_references.py. When given, only references marked credible are reported, and each read is assigned to the credible reference it is compatible with (any equally best-scoring alignment in the PAF); a read compatible with several credible references is assigned to the one with the most discriminatory reads")
+                  help="Reference evidence table written by assess_references.py. When given, only references marked credible are reported, and each read is assigned to the credible reference it is compatible with (any equally best-scoring alignment in the PAF); a read compatible with several credible references is split between them in the proportion of their discriminatory reads (column Weight)")
 
 (options, args) = parser.parse_args()
 
@@ -175,6 +175,19 @@ def load_evidence(path):
     return credible
 
 
+def split_weights(members, credible):
+    """Share of one read per reference: 1 for a single reference; for several credible
+    references, their discriminatory reads / the sum over all of them (equal shares if
+    the sum is 0, or without an evidence table). Returns a dict: reference -> weight."""
+    if len(members) == 1:
+        return {members[0]: 1.0}
+    disc = [credible[r] if credible else 0 for r in members]
+    total = sum(disc)
+    if total == 0:
+        return {r: 1.0 / len(members) for r in members}
+    return {r: n / total for r, n in zip(members, disc)}
+
+
 def load_compatible_hits(paf_path, min_mapq):
     """Per read: the PAF fields of its first alignment and the distinct references of all
     its compatible (equally best-scoring) alignments, as written by select_best_alignments.py.
@@ -242,26 +255,23 @@ def run():
 
     with open(options.OUT+".txt", 'wt') as export:
         export.write(
-            "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\n")
+            "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\tWeight\n")
         for seqId, lines, refs in hits:
             members = [r for r in refs if r in passing_taxids and r in names]
             if not members:
                 n_unassigned += 1
                 continue
-            # A read compatible with several credible references is assigned to the one with
-            # the most discriminatory reads (ties: the first reported); only credible
-            # references are ever reported, never a higher taxonomic level
-            if len(members) == 1:
-                taxId = members[0]
-            else:
-                taxId = max(members, key=lambda r: credible[r])
+            # A read compatible with several credible references is split between them in the
+            # proportion of their discriminatory reads; only credible references are ever
+            # reported, never a higher taxonomic level
+            if len(members) > 1:
                 n_shared += 1
             n_assigned += 1
-
-            name_path = name_path_of(taxId)
-            Tax = "\t".join(["_".join(x.split()) for x in name_path])
-            export.write(seqId + "\t" + taxId + "\t" +
-                         lines[1] + "\t" + lines[11] + "\t" + Tax + "\n")
+            for taxId, weight in split_weights(members, credible).items():
+                name_path = name_path_of(taxId)
+                Tax = "\t".join(["_".join(x.split()) for x in name_path])
+                export.write(seqId + "\t" + taxId + "\t" + lines[1] + "\t" + lines[11] + "\t" +
+                             Tax + "\t" + f"{weight:.6g}" + "\n")
 
             for ref_name in members:
                 ref_read_counts[ref_name] += 1
@@ -277,8 +287,8 @@ def run():
 
     if credible is not None:
         print(f"Reads assigned: {n_assigned}, of which {n_shared} are compatible with several credible "
-              f"references and were assigned to the one with the most discriminatory reads; reads "
-              f"without a credible reference: {n_unassigned}")
+              f"references and were split between them in proportion to their discriminatory reads; "
+              f"reads without a credible reference: {n_unassigned}")
 
     # Write ranked reference summary for plotting
     with open(options.OUT+".ref_summary.txt", 'wt') as ref_out:

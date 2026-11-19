@@ -35,7 +35,7 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 2. **Stage 2 — accurate mapping**: Remaps only the candidates to the complete database with base-level alignment (`-c`) and secondary alignments (`--secondary=yes -N 20`). The output is streamed straight into the best-alignment selection, so the very large all-alignments file is not stored. For each read all alignments with the best alignment score (`AS`) are kept (ties included), never ranked by MAPQ
 3. **Reference Evidence**: For each reference, separates reads that are *compatible* with it (it has the best `AS`, possibly tied with other references) from reads that *discriminate* it from all other references. A reference is only reported when enough discriminatory reads, spread over enough of its genome, support it (see [Taxonomic assignment](#taxonomic-assignment))
 4. **Coverage Calculation**: Computes per-reference breadth of coverage from all compatible alignments; references below the threshold are discarded
-5. **Taxonomic Assignment**: Links reads to taxonomic information using NCBI taxonomy; only credible references are reported, always at the level of the reference (never at a higher taxonomic level); a read compatible with several credible references is assigned to the one with the most discriminatory reads
+5. **Taxonomic Assignment**: Links reads to taxonomic information using NCBI taxonomy; only credible references are reported, always at the level of the reference (never at a higher taxonomic level); a read compatible with several credible references is split between them in the proportion of their discriminatory reads
 6. **Visualization**: Generates summary plots and per-reference alignment coverage plots
 
 ## Requirements
@@ -258,6 +258,7 @@ ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
 - `--min-disc-breadth`: ... and these reads cover at least this % of the reference (default: 5)
 - `--min-disc-evenness`: ... and are spread over the reference with at least this evenness, 0-1 (default: 0.5)
 - `--min-aln-len`: Minimum alignment length in bp of a read that counts as discriminatory evidence (default: 20). Lower it for very short reads, raise it to be stricter
+- `--no-dedup`: Count PCR duplicates as separate reads in `Mito_reference_evidence.txt` (default: a read with the same references, start, end and strand as an earlier read is counted once, see [Identity](#identity-right-species-or-closest-relative))
 - `--keep-all-alignments`: Also keep every Stage 2 alignment as `Mito_stage2_all_alignments.paf.gz` and `Mito_stage2_alignments.tsv.gz` (large, and adds several minutes on deep samples)
 - `-t, --threads`: Number of threads to use (default: 10)
 - `-c, --force`: Force overwrite of existing results (removes only `<out>/mapping` and `<out>/logs`)
@@ -326,7 +327,7 @@ output_directory/
 ### Output File Descriptions
 
 - **Mito.paf.gz**: Compressed PAF with, for each read, the alignments to all references that tie for its best `AS` (the references the read is compatible with). Each line carries the extra tags `nc` (number of compatible references), `dm` (`AS` margin to the best lower-scoring reference, if one was reported) and `na` (number of alignments minimap2 reported for the read). Evidence, coverage, taxonomy and plots are based on this file
-- **Mito_reference_evidence.txt**: One row per reference with read counts (`compatible_reads`, `discriminatory_reads`, `weak_unique_reads`, `shared_reads`, `discriminatory_at_limit`), breadth, depth and evenness of the compatible and of the discriminatory reads, whether the reference is `credible` and, if not, the `reason`
+- **Mito_reference_evidence.txt**: One row per reference with read counts (`compatible_reads`, `discriminatory_reads`, `weak_unique_reads`, `shared_reads`, `discriminatory_at_limit`), breadth, depth, evenness of the compatible and of the discriminatory reads, the identity of the discriminatory reads (`discriminatory_identity`, `discriminatory_exact`, `edit_distance_decline`, see [Identity](#identity-right-species-or-closest-relative)), the fraction of compatible reads skipped as PCR duplicates (`duplicate_fraction`), whether the reference is `credible` and, if not, the `reason`
 - **Mito_stage1_hits.txt**, **Mito_stage1_candidates*.fastq.gz**: Stage 1 output. Hit names (any MAPQ) and the candidate reads extracted from the original FASTQ file(s)
 - **Mito_stage2_all_alignments.paf.gz**, **Mito_stage2_alignments.tsv.gz** (only with `--keep-all-alignments`): all Stage 2 alignments, including secondary ones (`tp:A:S`). The table lists reference, coordinates, aligned length, MAPQ, `tp`, `AS`, `NM`, whether the alignment was chosen as best and its `AS` difference to the best alignment of the read, so ambiguous reads can be inspected
 - **Mito_coverage.txt**: Per-reference coverage statistics — columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
@@ -369,9 +370,58 @@ Closely related mitogenomes share many reads. A species that is not in the sampl
 - **compatible**: the reference has the best alignment score (`AS`) for the read, including reads that tie with other references;
 - **discriminatory**: the reference is the only one with the best `AS`, by at least 10 `AS` points over every competing reference that was reported, and the alignment is adequate (at least `--min-aln-len` bp, 20 by default, at least half of the read aligned, at least 90% identity). Short chance matches are `weak_unique_reads`, not evidence.
 
-A reference is reported (`credible`) when it has at least `--min-disc-reads` discriminatory reads that cover at least `--min-disc-breadth` % of it and are spread over it with an evenness (normalised Shannon entropy over 20 equal windows) of at least `--min-disc-evenness`. No threshold depends on how abundant other species are, so a rare species with well-spread discriminatory reads is kept. Reads shared between references still count towards the coverage of every credible reference they are compatible with, and a read that is compatible with several credible references is assigned to the one with the most discriminatory reads (ties: the first one reported). Only credible references are reported, always as the reference itself; nothing is reported at a higher taxonomic level. If a sample only contains shared reads, no reference is credible and nothing is reported.
+A reference is reported (`credible`) when it has at least `--min-disc-reads` discriminatory reads that cover at least `--min-disc-breadth` % of it and are spread over it with an evenness (normalised Shannon entropy over 20 equal windows) of at least `--min-disc-evenness`. No threshold depends on how abundant other species are, so a rare species with well-spread discriminatory reads is kept. Reads shared between references still count towards the coverage of every credible reference they are compatible with, and a read that is compatible with several credible references is split between them in the proportion of their discriminatory reads: with 300 and 100 discriminatory reads, a shared read counts 0.75 and 0.25. `Mito_summary.txt` has one row per read and reference, with this share in the column `Weight`, and the species tables sum the weights. Only credible references are reported, always as the reference itself; nothing is reported at a higher taxonomic level. If a sample only contains shared reads, no reference is credible and nothing is reported.
 
 Limits: minimap2 reports at most `--max-alns` (+1) alignments per read, chosen before base-level alignment, so a competing reference may not be reported for a read. A unique best alignment is therefore only provisional; `discriminatory_at_limit` in `Mito_reference_evidence.txt` counts discriminatory reads for which the limit was reached. Species that are credible only because of reads at the limit, or because of a few reads, should be treated with caution. The thresholds are defaults chosen on one test data set and may need adjusting.
+
+### Identity: right species or closest relative
+
+The database only holds species with a curated RefSeq mitogenome. When the species in a sample is not in it, its reads go to the closest relative that is. That relative then gets many discriminatory reads, spread over its whole genome, and is reported as `credible`, exactly like a correct hit. Counts, breadth and evenness cannot tell "this is species X" from "this is something close to X".
+
+How well the reads match the reference can sometimes help. For every reference, `Mito_reference_evidence.txt` gives three columns, computed from the Stage 2 alignment of its discriminatory reads only:
+
+- `discriminatory_identity`: pooled identity, 1 - (sum of `NM`) / (sum of alignment lengths). Unlike a median, it does not move in steps of one mismatch per read.
+- `discriminatory_exact`: fraction of the discriminatory reads without any mismatch.
+- `edit_distance_decline`: the edit distance decline (-Δ%) of HOPS (Hübler et al. 2019, doi:10.1186/s13059-019-1903-0), computed as in its post-processing script: over the numbers of reads with 0, 1, 2 and 3 mismatches, the sum of the decreases between neighbouring numbers divided by the sum of all changes. 1 means the numbers fall at every step, as expected for reads of the reference species; reads of a relative peak at 1 or 2 mismatches and give a lower value. HOPS accepts 0.9 or more. `NA` when there is no change (no reads with 0-3 mismatches).
+
+Shared reads are left out because they come from conserved regions, which match distant references as well as the right one. For the identity columns, `NA` means the reference has no discriminatory read with an `NM` tag. The columns are reported only; they do not change which references are credible or how reads are assigned.
+
+What the columns can and cannot tell:
+
+- **They can show a poor match.** A credible reference with `edit_distance_decline` below 0.9 does not fit the reads well: the species in the sample, or its haplotype, is probably not in the database. In the test below this held for every relative of a missing species but one (next points). `discriminatory_identity` and `discriminatory_exact` show how poor the fit is; compare them only within a sample or with a sample of known species of the same read length, platform and processing.
+- **Compare identities within a sample, never with a fixed number.** Sequencing errors, damage and the haplotype of the sample shift all references of a sample together: the *D. simulans* sample below matches its own species at 0.979, the *D. melanogaster* sample at 0.996.
+- **A good decline is not proof.** A reference whose discriminatory reads all come from one region nearly identical to the sample species can still reach 1 (*D. formosana* below); check `discriminatory_breadth` as well. With few reads (about 10-20) the value is noisy.
+- **They cannot tell close relatives apart.** Species that share haplotypes give the same identity. Equal identities on several references say nothing about which one is right.
+
+Measured on 4M read pairs of *D. simulans* (76 bp) and *D. melanogaster* (75 bp), against the full database and against a database without the sample's own species. Credible references, `discriminatory_identity` / `discriminatory_exact` / `edit_distance_decline`:
+
+| Sample | Database | Credible references |
+| --- | --- | --- |
+| *D. melanogaster* | full | *D. melanogaster* 0.9956 / 0.764 / 1.000 |
+| *D. melanogaster* | without *D. melanogaster* | *D. formosana* 0.9941 / 0.686 / 1.000, *D. mauritiana* 0.9774 / 0.274 / 0.667, *D. simulans* 0.9747 / 0.205 / 0.357 |
+| *D. simulans* | full | *D. melanogaster* 0.9822 / 0.299 / 0.744, *D. mauritiana* 0.9813 / 0.288 / 0.738, *D. sechellia* 0.9802 / 0.261 / 0.813, *D. simulans* 0.9789 / 0.244 / 0.666 |
+| *D. simulans* | without *D. simulans* | *D. sechellia* 0.9805 / 0.260 / 0.758, *D. mauritiana* 0.9797 / 0.263 / 0.715, *D. melanogaster* 0.9786 / 0.208 / 0.631 |
+| 3 *D. melanogaster* : 1 *D. simulans* | full | *D. melanogaster* 0.9855 / 0.571 / 1.000, *D. mauritiana*, *D. sechellia*, *D. simulans* 0.969-0.971 / 0.19-0.21 / 0.58-0.69 |
+
+*D. melanogaster* fits its own reference (decline 1.000); with it removed, its closest relatives fall to 0.36-0.67. *D. formosana* stays at 1.000 because its discriminatory reads come from one region (17% breadth) that is nearly identical to *D. melanogaster*. The *D. simulans* sample fits no reference (0.67-0.81, also with the full database), because its haplogroup is not in the database (see below); the same holds for the *D. simulans* part of the mix.
+
+Why the expected value is below 1, and what affects it:
+
+- **Variation within a species.** The reference is one individual. The haplotype of a sample can differ from it by several percent even for the right species: the *D. simulans* haplogroups siI and siII differ by about 3%, more than *D. simulans* siI differs from *D. sechellia* (about 1.3%) (Ballard 2000, doi:10.1007/s002390010067).
+- **Sequencing errors and ancient DNA damage.** Both add mismatches to every read. C to T and G to A changes at read ends lower the identity of aDNA samples, so compare a sample with a sample of known species processed the same way, not with 1.
+- **NUMTs.** Nuclear copies of mitochondrial DNA have changed since they were inserted and map with lower identity. They give a tail of low-identity reads even on the correct reference. Mitochondria have hundreds to thousands of copies per cell and a nuclear region two, and *Drosophila* has few NUMTs, so the identity is rarely affected; samples with very few mitochondrial reads are the exception.
+- **Short reads.** At 30 bp one mismatch is 3.3%, so `discriminatory_exact` is higher for short reads at the same divergence. Compare samples of similar read length.
+- **Divergent reads are not mapped.** Reads that differ too much from every reference do not pass the minimap2 seeding and chaining thresholds, and discriminatory reads need at least `--min-identity`. The identity therefore underestimates the divergence of a missing species, and a reference can look close from one conserved region alone; check `discriminatory_breadth` as well.
+
+#### PCR duplicates
+
+Copies of one DNA molecule add no evidence, but would count towards `--min-disc-reads` and repeat the same errors in the identity columns. By default, a read whose compatible alignments have the same references, start, end and strand as an earlier read is skipped in `Mito_reference_evidence.txt`; `duplicate_fraction` gives the share of compatible reads skipped per reference. Breadth is not affected. The read assignment and the summary proportions still count every read.
+
+The key is exact for merged reads, whose start and end are the ends of the molecule. Unmerged mates of the same trimmed length are keyed on one end only, so at high depth unrelated reads collide: in the *D. simulans* test sample (about 130x on the mitogenome) 47-55% of the reads were skipped, against 2-3% at about 2x in the *D. melanogaster* sample. There, `duplicate_fraction` is an upper bound. In these tests no reference changed its `credible` status. Use `--no-dedup` to count every read, for example when duplicates were already removed.
+
+#### Species that share mitochondrial haplotypes
+
+*D. simulans* carries three divergent haplogroups (siI, siII, siIII), and *D. mauritiana* haplogroup maI is nearly identical to siIII after introgression (Ballard 2000, doi:10.1093/oxfordjournals.molbev.a026394). The database has one mitogenome per species (the *D. simulans* RefSeq is probably siI, a rare Pacific lineage), so the reference of the right species can match a sample worse than the reference of its sister species: in the test above, the *D. simulans* sample fits the *D. mauritiana* reference better than its own. Read counts and identity cannot separate such species. Treat credible hits within such a group as "one of the group", and use nuclear markers to decide between them. The same applies to other species complexes with shared or introgressed mitochondria.
 
 ### Two-stage mapping parameters
 

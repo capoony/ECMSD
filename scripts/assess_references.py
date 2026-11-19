@@ -15,9 +15,22 @@ For every reference two kinds of evidence are calculated:
                 margin of at least --min-margin AS points over every competitor that was
                 reported, and whose alignment is of adequate quality (length, aligned
                 fraction of the read and identity). Independent evidence for presence.
-and for each of them the breadth (% of positions covered), the mean depth and the
+and for each of them the breadth (% of positions covered), the mean depth, the
 evenness (normalised Shannon entropy of the read positions over 20 equal windows of
-the reference: 1 = uniform, 0 = all reads in one window).
+the reference: 1 = uniform, 0 = all reads in one window). For the discriminatory reads
+the table also gives the pooled identity (1 - summed NM / summed alignment length), the
+fraction of reads without a mismatch, and the HOPS edit distance decline (-delta%,
+Huebler et al. 2019): over the read counts with 0, 1, 2 and 3 mismatches, the summed
+decreases between neighbouring counts divided by all summed changes, 1 for a strictly
+declining distribution as expected for reads of the reference species. Shared reads are left out of the identity: they come from
+conserved regions and match distant references as well as the right one. The identity
+is only reported, never used to decide; compare references within a sample, because
+sequencing errors, damage and haplotype differences shift all references of a sample.
+
+PCR duplicates: a read whose compatible alignments have the same references, start,
+end and strand as an earlier read is counted once (disable with --no-dedup). This is
+exact for merged reads; for unmerged mates of equal length unrelated reads can share
+a position at high depth, so duplicate_fraction is an upper bound there.
 
 Step A, credible references: a reference is credible when its discriminatory reads
 reach --min-disc-reads, cover at least --min-disc-breadth percent of the reference and
@@ -42,7 +55,7 @@ NBINS = 20
 HEADER = ["reference", "taxon_name", "ref_length", "compatible_reads", "discriminatory_reads",
           "weak_unique_reads", "shared_reads", "discriminatory_at_limit", "compatible_breadth", "discriminatory_breadth",
           "compatible_depth", "discriminatory_depth", "compatible_evenness",
-          "discriminatory_evenness", "credible", "reason"]
+          "discriminatory_evenness", "discriminatory_identity", "discriminatory_exact", "edit_distance_decline", "duplicate_fraction", "credible", "reason"]
 
 
 def opener(path, encoding=None):
@@ -79,7 +92,7 @@ def iter_reads(fh):
 
 
 def parse_alignment(f):
-    """(ref, ref_len, start, end, qlen, qspan, alen, AS, NM, dm, na) of one PAF line."""
+    """(ref, ref_len, start, end, qlen, qspan, alen, AS, NM, dm, na, strand) of one PAF line."""
     AS = NM = dm = na = None
     for tag in f[12:]:
         key = tag[:5]
@@ -91,29 +104,49 @@ def parse_alignment(f):
             dm = int(tag[5:])
         elif key == "na:i:":
             na = int(tag[5:])
-    return (f[5], int(f[6]), int(f[7]), int(f[8]), int(f[1]), int(f[3]) - int(f[2]), int(f[10]), AS, NM, dm, na)
+    return (f[5], int(f[6]), int(f[7]), int(f[8]), int(f[1]), int(f[3]) - int(f[2]), int(f[10]), AS, NM, dm, na, f[4])
+
+
+def identity(a):
+    """1 - NM / alignment length, or None without NM or alignment."""
+    alen, nm = a[6], a[8]
+    return None if nm is None or alen <= 0 else 1.0 - nm / alen
 
 
 def good_quality(a, min_aln_len, min_aln_frac, min_identity):
     """Is the alignment long, complete and accurate enough to count as evidence?"""
-    alen, qlen, qspan, nm = a[6], a[4], a[5], a[8]
+    alen, qlen, qspan, ident = a[6], a[4], a[5], identity(a)
     if alen < min_aln_len:
         return False
     if qlen > 0 and qspan / qlen < min_aln_frac:
         return False
-    if nm is not None and alen > 0 and 1.0 - nm / alen < min_identity:
+    if ident is not None and ident < min_identity:
         return False
     return True
 
 
 class RefEvidence:
-    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins")
+    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins", "dnm", "dalen", "dn", "dexact", "dhist", "dups")
 
     def __init__(self, length):
         self.length = length
         self.compat = self.disc = self.weak = self.limit = 0
         self.cdiff, self.ddiff = {}, {}      # sparse difference arrays: position -> delta depth
         self.cbins, self.dbins = [0] * NBINS, [0] * NBINS
+        self.dnm = self.dalen = self.dn = self.dexact = 0   # summed NM, alignment length, reads, reads with NM 0
+        self.dhist = [0] * 4                                 # reads with NM 0, 1, 2, 3
+        self.dups = 0                                        # compatible reads skipped as PCR duplicates
+
+    def add_identity(self, a):
+        """Count a discriminatory read in the identity (reads without NM are skipped)."""
+        if a[8] is None or a[6] <= 0:
+            return
+        self.dnm += a[8]
+        self.dalen += a[6]
+        self.dn += 1
+        self.dexact += a[8] == 0
+        if a[8] < len(self.dhist):
+            self.dhist[a[8]] += 1
 
     def add(self, a, discriminatory):
         start, end = a[2], a[3]
@@ -124,16 +157,27 @@ class RefEvidence:
             bins[mid] += 1
 
 
-def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.9, max_alns=20):
+def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.9, max_alns=20, dedup=True):
     """Read the PAF once; return ({ref: RefEvidence}, read statistics)."""
     refs = {}
-    stats = dict(reads=0, unique=0, shared=0, discriminatory=0, weak=0)
+    stats = dict(reads=0, unique=0, shared=0, discriminatory=0, weak=0, duplicates=0)
+    seen = set()   # molecule keys of the reads counted so far
     for group in iter_reads(fh):
         alns = [parse_alignment(f) for f in group]
         scores = [a[7] for a in alns if a[7] is not None]
         top = max(scores) if scores else None
         compat = [a for a in alns if top is None or a[7] == top]
         compat_refs = {a[0] for a in compat}
+        if dedup:
+            key = frozenset((a[0], a[2], a[3], a[11]) for a in compat)
+            if key in seen:
+                stats["duplicates"] += 1
+                for ref in compat_refs:
+                    ev = refs.get(ref)
+                    if ev is not None:  # always set: the first copy created it
+                        ev.dups += 1
+                continue
+            seen.add(key)
         lower = [a[7] for a in alns if top is not None and a[7] is not None and a[7] < top
                  and a[0] not in compat_refs]
         dm = next((a[9] for a in compat if a[9] is not None), None)
@@ -158,6 +202,7 @@ def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.
                 if unique:
                     if discriminatory:
                         ev.disc += 1
+                        ev.add_identity(a)
                         ev.limit += at_limit
                     else:
                         ev.weak += 1
@@ -185,6 +230,13 @@ def evenness(bins):
     return max(0.0, -sum(c / n * math.log(c / n) for c in bins if c) / math.log(len(bins)))
 
 
+def edit_distance_decline(hist):
+    """HOPS -delta%: summed decreases / summed changes between neighbouring counts; None without change."""
+    d = [b - a for a, b in zip(hist, hist[1:])]
+    total = sum(abs(x) for x in d)
+    return sum(-x for x in d if x < 0) / total if total else None
+
+
 def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
     """Step A. Return (row metrics, credible, reasons)."""
     L = ev.length
@@ -192,7 +244,11 @@ def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
     dc, dt = sweep(ev.ddiff)
     m = dict(compat_breadth=100.0 * cc / L if L else 0.0, disc_breadth=100.0 * dc / L if L else 0.0,
              compat_depth=ct / L if L else 0.0, disc_depth=dt / L if L else 0.0,
-             compat_even=evenness(ev.cbins), disc_even=evenness(ev.dbins))
+             compat_even=evenness(ev.cbins), disc_even=evenness(ev.dbins),
+             disc_ident=1.0 - ev.dnm / ev.dalen if ev.dalen else None,
+             disc_exact=ev.dexact / ev.dn if ev.dn else None,
+             decline=edit_distance_decline(ev.dhist),
+             dup_frac=ev.dups / (ev.compat + ev.dups) if ev.compat + ev.dups else None)
     reasons = []
     if ev.disc < min_disc_reads:
         reasons.append("few_discriminatory_reads")
@@ -201,6 +257,10 @@ def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
     if m["disc_even"] < min_disc_evenness:
         reasons.append("uneven_discriminatory_coverage")
     return m, not reasons, reasons
+
+
+def fmt(x, digits):
+    return "NA" if x is None else "%.*f" % (digits, x)
 
 
 def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_evenness):
@@ -219,6 +279,8 @@ def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_eve
             "%.2f" % m["compat_breadth"], "%.2f" % m["disc_breadth"],
             "%.2f" % m["compat_depth"], "%.2f" % m["disc_depth"],
             "%.3f" % m["compat_even"], "%.3f" % m["disc_even"],
+            fmt(m["disc_ident"], 4), fmt(m["disc_exact"], 3),
+            fmt(m["decline"], 3), fmt(m["dup_frac"], 3),
             "yes" if ok else "no", "pass" if ok else ";".join(reasons)]) + "\n")
     return n_credible
 
@@ -238,6 +300,8 @@ def main(argv=None):
                    help="minimum identity, 1 - NM/alignment length, of a discriminatory read (default: 0.9)")
     p.add_argument("--max-alns", type=int, default=20,
                    help="the minimap2 -N used in Stage 2; discriminatory reads with more reported alignments are counted as at the limit (default: 20)")
+    p.add_argument("--no-dedup", action="store_true",
+                   help="count PCR duplicates (reads with the same references, start, end and strand) as separate reads")
     p.add_argument("--min-disc-reads", type=int, default=20,
                    help="credible: minimum number of discriminatory reads (default: 20)")
     p.add_argument("--min-disc-breadth", type=float, default=5.0,
@@ -248,12 +312,12 @@ def main(argv=None):
 
     with opener(args.PAF) as fh:
         refs, stats = collect(fh, args.min_margin, args.min_aln_len, args.min_aln_frac, args.min_identity,
-                              args.max_alns)
+                              args.max_alns, dedup=not args.no_dedup)
     names = load_names(args.Names) if args.Names else {}
     with open(args.output, "w") as out:
         n_credible = write_table(refs, out, names, args.min_disc_reads, args.min_disc_breadth,
                                  args.min_disc_evenness)
-    print(f"Reference evidence: {stats['reads']} reads, {stats['shared']} shared between references, "
+    print(f"Reference evidence: {stats['reads']} reads ({stats['duplicates']} PCR duplicates skipped), {stats['shared']} shared between references, "
           f"{stats['discriminatory']} discriminatory, {stats['weak']} with a unique but weak best alignment; "
           f"{n_credible} of {len(refs)} references credible. Written to: {args.output}")
     return 0

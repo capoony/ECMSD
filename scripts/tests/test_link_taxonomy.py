@@ -136,6 +136,14 @@ class EvidenceModeTests(unittest.TestCase):
         finally:
             os.remove(path)
 
+    def test_shared_read_is_split_in_proportion_of_discriminatory_reads(self):
+        credible = {"101": 30, "102": 10, "103": 0}
+        self.assertEqual(lt.split_weights(["101"], credible), {"101": 1.0})
+        self.assertEqual(lt.split_weights(["101", "102"], credible), {"101": 0.75, "102": 0.25})
+        self.assertEqual(lt.split_weights(["103", "103b"], {"103": 0, "103b": 0}),
+                         {"103": 0.5, "103b": 0.5})
+        self.assertEqual(lt.split_weights(["101", "102"], None), {"101": 0.5, "102": 0.5})
+
     def test_there_is_no_lowest_common_ancestor_assignment(self):
         self.assertFalse(hasattr(lt, "lowest_common_ancestor"))
 

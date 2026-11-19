@@ -41,6 +41,7 @@ ALL ARGUMENTS:
      | --min-disc-breadth PCT                ... and these reads cover at least PCT % of the reference (default: 5)
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
      | --min-aln-len N                       Minimum alignment length in bp of a read that counts as discriminatory evidence; lower it for very short reads (default: 20)
+     | --no-dedup                            Count PCR duplicates (same references, start, end and strand) as separate reads in the evidence table
      | --keep-all-alignments                 Stage 2: also keep every alignment (all_alignments PAF and a table with tp, AS, NM, MAPQ); large and slower
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
@@ -84,6 +85,7 @@ min_disc_reads=20
 min_disc_breadth=5
 min_disc_evenness=0.5
 min_aln_len=20
+dedup="yes"
 threads=10
 force="no"
 skip_mapping="no"
@@ -173,6 +175,10 @@ while [[ $# -gt 0 ]]; do
         need_value "$@"
         min_aln_len="$2"
         shift 2
+        ;;
+    --no-dedup)
+        dedup="no"
+        shift
         ;;
     --keep-all-alignments)
         keep_all="yes"
@@ -525,7 +531,8 @@ python3 "${SCRIPT_DIR}/assess_references.py" \
     --min-disc-reads "${min_disc_reads}" \
     --min-disc-breadth "${min_disc_breadth}" \
     --min-disc-evenness "${min_disc_evenness}" \
-    --min-aln-len "${min_aln_len}"
+    --min-aln-len "${min_aln_len}" \
+    $([[ "${dedup}" == "no" ]] && echo --no-dedup)
 
 ###############################################################################
 #                        Coverage Calculation                                 #
