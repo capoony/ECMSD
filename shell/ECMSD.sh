@@ -42,6 +42,7 @@ ALL ARGUMENTS:
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
      | --min-aln-len N                       Minimum alignment length in bp of a read that counts as discriminatory evidence; lower it for very short reads (default: 20)
      | --no-dedup                            Count PCR duplicates (same references, start, end and strand) as separate reads in the evidence table
+     | --group-by-taxid MODE                 auto, yes or no: count all references of one taxid (FASTA headers <taxid>|<accession>, e.g. several haplotypes of a species) as one unit for evidence, credibility and assignment; auto = yes when the database has several references of a taxid (default: auto)
      | --keep-all-alignments                 Stage 2: also keep every alignment (all_alignments PAF and a table with tp, AS, NM, MAPQ); large and slower
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
@@ -86,6 +87,7 @@ min_disc_breadth=5
 min_disc_evenness=0.5
 min_aln_len=20
 dedup="yes"
+group_by_taxid="auto"
 threads=10
 force="no"
 skip_mapping="no"
@@ -180,6 +182,11 @@ while [[ $# -gt 0 ]]; do
         dedup="no"
         shift
         ;;
+    --group-by-taxid)
+        need_value "$@"
+        group_by_taxid="$2"
+        shift 2
+        ;;
     --keep-all-alignments)
         keep_all="yes"
         shift
@@ -250,6 +257,13 @@ done
 for pair in "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--seed-k:${seed_k}" "--seed-w:${seed_w}" "--max-alns:${max_alns}" "--min-chain-score:${chain_score}" "--min-disc-reads:${min_disc_reads}" "--min-aln-len:${min_aln_len}"; do
     [[ "${pair#*:}" =~ ^[0-9]+$ ]] || { echo "Error: ${pair%%:*} requires an integer, got '${pair#*:}'." >&2; exit 1; }
 done
+case "${group_by_taxid}" in
+auto | yes | no) ;;
+*)
+    echo "Error: --group-by-taxid must be auto, yes or no (got '${group_by_taxid}')." >&2
+    exit 1
+    ;;
+esac
 taxonomic_hierarchy="${taxonomic_hierarchy,,}"
 case "${taxonomic_hierarchy}" in
 subspecies | species | genus | family | order | class | phylum | kingdom | domain) ;;
@@ -518,6 +532,16 @@ fi
 # not when it merely shares reads with a reference that is present (Step A). The
 # coverage of the credible references is then calculated from all compatible
 # alignments, including reads that tie with other references (Step B).
+if [[ "${group_by_taxid}" == "auto" ]]; then
+    # several references of one taxid only exist in databases with <taxid>|<accession> headers
+    # wc reads to the end: an early-exiting reader would make pipefail report SIGPIPE
+    if [[ $(gzip -dc "${REF}" | grep '^>' | cut -d'|' -f1 | sort | uniq -d | wc -l) -gt 0 ]]; then
+        group_by_taxid="yes"
+    else
+        group_by_taxid="no"
+    fi
+fi
+echo "Grouping references by taxid: ${group_by_taxid}"
 EVIDENCE_OUT="${Output}/mapping/Mito_reference_evidence.txt"
 if [[ -n "${prefix}" ]]; then
     EVIDENCE_OUT="${Output}/mapping/${prefix}_Mito_reference_evidence.txt"
@@ -532,7 +556,8 @@ python3 "${SCRIPT_DIR}/assess_references.py" \
     --min-disc-breadth "${min_disc_breadth}" \
     --min-disc-evenness "${min_disc_evenness}" \
     --min-aln-len "${min_aln_len}" \
-    $([[ "${dedup}" == "no" ]] && echo --no-dedup)
+    $([[ "${dedup}" == "no" ]] && echo --no-dedup) \
+    $([[ "${group_by_taxid}" == "yes" ]] && echo --group-by-taxid)
 
 ###############################################################################
 #                        Coverage Calculation                                 #
@@ -570,6 +595,7 @@ python3 "${SCRIPT_DIR}/LinkTaxonomy.py" \
     --CovThreshold "${cov_threshold}" \
     --TaxonomicHierarchy "${taxonomic_hierarchy}" \
     --MapQuality "${quality}" \
+    $([[ "${group_by_taxid}" == "yes" ]] && echo --GroupByTaxid) \
     --output "${output_base}"
 
 ###############################################################################

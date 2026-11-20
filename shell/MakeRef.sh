@@ -261,13 +261,13 @@ cleanup_intermediates() {
 }
 
 # Function to trim nodes.dmp and names.dmp to the lineages of taxids in the final
-# FASTA (headers are bare taxids). Keeps every ancestor up to root 1, so
+# FASTA (headers are taxids, or <taxid>|<accession> in databases with several references per taxid). Keeps every ancestor up to root 1, so
 # LinkTaxonomy.py lookups still resolve. Resumable: a trimmed nodes.dmp is
 # tiny, so re-trimming is idempotent, and files are replaced via .tmp + mv.
 trim_taxdump() {
     echo "Trimming taxonomy files to taxids present in the database... "
     local ids
-    ids=$(gzip -dc "${REF_FILE}" | grep '^>' | tr -d '>') || true
+    ids=$(gzip -dc "${REF_FILE}" | grep '^>' | tr -d '>' | cut -d'|' -f1) || true
     if [ -z "${ids}" ]; then
         echo "Error: no taxids found in ${REF_FILE}; not trimming taxonomy."
         exit 1

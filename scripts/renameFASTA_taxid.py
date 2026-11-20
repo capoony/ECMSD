@@ -14,6 +14,8 @@ parser = OptionParser(usage=usage)
 parser.add_option("--input", dest="IN", help="Input file")
 parser.add_option("--Taxid", dest="TX", help="")
 parser.add_option("--output", dest="OUT", help="Output file")
+parser.add_option("--all-per-taxid", dest="ALL", action="store_true", default=False,
+                  help="keep every sequence of a taxid, with headers <taxid>|<accession> (default: only the first, header <taxid>)")
 
 (options, args) = parser.parse_args()
 
@@ -40,18 +42,23 @@ def load_taxid_dict(fh):
     return taxid_dict
 
 
-def rename_fasta(in_fh, out_fh, taxid_dict):
+def rename_fasta(in_fh, out_fh, taxid_dict, all_per_taxid=False):
     """
     Rewrite a FASTA stream, replacing each header with its taxid (drops the
     sequence description). Keeps only the first sequence seen per taxid;
     later sequences mapping to an already-written taxid (or to a name not in
-    taxid_dict) are dropped entirely.
+    taxid_dict) are dropped entirely. With all_per_taxid every sequence with a taxid
+    is kept and named <taxid>|<accession>, so reference names stay unique.
     """
     seen_taxids = set()
     skip = False
     for line in in_fh:
         if line.startswith(">"):
             name = line[1:].rstrip().split(" ")[0]
+            if name in taxid_dict and all_per_taxid:
+                skip = False
+                out_fh.write(f">{taxid_dict[name]}|{name}\n")
+                continue
             if name in taxid_dict and taxid_dict[name] not in seen_taxids:
                 skip = False
                 seen_taxids.add(taxid_dict[name])
@@ -79,7 +86,7 @@ def run():
         taxid_dict = load_taxid_dict(tx_fh)
 
     with load_data(options.IN) as f, open(options.OUT, "wt") as o:
-        rename_fasta(f, o, taxid_dict)
+        rename_fasta(f, o, taxid_dict, options.ALL)
 
 
 if __name__ == "__main__":

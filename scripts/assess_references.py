@@ -40,6 +40,14 @@ abundance of other references, so a rare species is not removed for being rare.
 Step B, which uses all compatible alignments to calculate the coverage of the credible
 references, and the assignment of reads, is done by LinkTaxonomy.py with --Evidence.
 
+Several references per species: reference names are "<taxid>" or "<taxid>|<accession>".
+With --group-by-taxid all references of one taxid (e.g. haplotypes of a species) form one
+unit: a read is discriminatory when its best alignments all lie on references of that one
+taxid, by a margin over the best reference of another taxid (dt tag of
+select_best_alignments.py, else dm). Breadth and evenness of a unit pool the positions of
+its references (one alignment per read and unit); the table then has one row per taxid,
+whose length is that of its longest reference.
+
 A unique best alignment is only provisional evidence: minimap2 reports a limited number
 of secondary alignments chosen before base-level alignment, so a better or equal
 reference may not have been reported for a read. Discriminatory reads for which the
@@ -92,8 +100,9 @@ def iter_reads(fh):
 
 
 def parse_alignment(f):
-    """(ref, ref_len, start, end, qlen, qspan, alen, AS, NM, dm, na, strand) of one PAF line."""
-    AS = NM = dm = na = None
+    """(ref, ref_len, start, end, qlen, qspan, alen, AS, NM, dm, na, strand, dt) of one PAF line.
+    dt is None without the tag and -1 when no reference of another taxid was reported."""
+    AS = NM = dm = na = dt = None
     for tag in f[12:]:
         key = tag[:5]
         if key == "AS:i:":
@@ -104,7 +113,14 @@ def parse_alignment(f):
             dm = int(tag[5:])
         elif key == "na:i:":
             na = int(tag[5:])
-    return (f[5], int(f[6]), int(f[7]), int(f[8]), int(f[1]), int(f[3]) - int(f[2]), int(f[10]), AS, NM, dm, na, f[4])
+        elif key == "dt:i:":
+            dt = int(tag[5:])
+    return (f[5], int(f[6]), int(f[7]), int(f[8]), int(f[1]), int(f[3]) - int(f[2]), int(f[10]), AS, NM, dm, na, f[4], dt)
+
+
+def ref_taxid(ref):
+    """Taxid of a reference named "<taxid>" or "<taxid>|<accession>"."""
+    return ref.split("|", 1)[0]
 
 
 def identity(a):
@@ -150,15 +166,19 @@ class RefEvidence:
 
     def add(self, a, discriminatory):
         start, end = a[2], a[3]
-        mid = min(NBINS - 1, int((start + end) / 2 * NBINS / self.length)) if self.length > 0 else 0
+        # bin on the alignment's own reference: references of a taxid unit differ in length
+        mid = min(NBINS - 1, int((start + end) / 2 * NBINS / a[1])) if a[1] > 0 else 0
         for diff, bins in ((self.cdiff, self.cbins),) + (((self.ddiff, self.dbins),) if discriminatory else ()):
             diff[start] = diff.get(start, 0) + 1
             diff[end] = diff.get(end, 0) - 1
             bins[mid] += 1
 
 
-def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.9, max_alns=20, dedup=True):
-    """Read the PAF once; return ({ref: RefEvidence}, read statistics)."""
+def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.9, max_alns=20, dedup=True,
+            group_by_taxid=False):
+    """Read the PAF once; return ({ref: RefEvidence}, read statistics). With group_by_taxid the
+    keys are taxids and all references of a taxid count as one (see module doc)."""
+    unit = ref_taxid if group_by_taxid else (lambda r: r)
     refs = {}
     stats = dict(reads=0, unique=0, shared=0, discriminatory=0, weak=0, duplicates=0)
     seen = set()   # molecule keys of the reads counted so far
@@ -167,6 +187,14 @@ def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.
         scores = [a[7] for a in alns if a[7] is not None]
         top = max(scores) if scores else None
         compat = [a for a in alns if top is None or a[7] == top]
+        if group_by_taxid:
+            # one alignment per unit (the first, as select_best_alignments writes the best first),
+            # renamed to the unit so that everything below counts units
+            first = {}
+            for a in compat:
+                first.setdefault(unit(a[0]), (unit(a[0]),) + a[1:])
+            compat = list(first.values())
+            alns = compat + [(unit(a[0]),) + a[1:] for a in alns if a[7] != top]
         compat_refs = {a[0] for a in compat}
         if dedup:
             key = frozenset((a[0], a[2], a[3], a[11]) for a in compat)
@@ -181,6 +209,10 @@ def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.
         lower = [a[7] for a in alns if top is not None and a[7] is not None and a[7] < top
                  and a[0] not in compat_refs]
         dm = next((a[9] for a in compat if a[9] is not None), None)
+        if group_by_taxid:
+            dt = next((a[12] for a in compat if a[12] is not None), None)
+            if dt is not None:
+                dm = None if dt < 0 else dt
         if dm is None and lower:
             dm = top - max(lower)
         unique = len(compat_refs) == 1
@@ -195,6 +227,7 @@ def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.
             ev = refs.get(a[0])
             if ev is None:
                 ev = refs[a[0]] = RefEvidence(a[1])
+            ev.length = max(ev.length, a[1])
             ev.add(a, discriminatory)
             if a[0] not in counted:
                 counted.add(a[0])
@@ -274,7 +307,7 @@ def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_eve
     out.write("\t".join(HEADER) + "\n")
     for _, _, ref, ev, m, ok, reasons in rows:
         out.write("\t".join([
-            ref, names.get(ref, "NA").replace(" ", "_"), str(ev.length), str(ev.compat), str(ev.disc),
+            ref, names.get(ref_taxid(ref), "NA").replace(" ", "_"), str(ev.length), str(ev.compat), str(ev.disc),
             str(ev.weak), str(ev.compat - ev.disc - ev.weak), str(ev.limit),
             "%.2f" % m["compat_breadth"], "%.2f" % m["disc_breadth"],
             "%.2f" % m["compat_depth"], "%.2f" % m["disc_depth"],
@@ -308,11 +341,13 @@ def main(argv=None):
                    help="credible: minimum %% of the reference covered by discriminatory reads (default: 5)")
     p.add_argument("--min-disc-evenness", type=float, default=0.5,
                    help="credible: minimum evenness (0-1) of the discriminatory reads over the reference (default: 0.5)")
+    p.add_argument("--group-by-taxid", action="store_true",
+                   help="count all references of one taxid (names <taxid>|<accession>) as one unit")
     args = p.parse_args(argv)
 
     with opener(args.PAF) as fh:
         refs, stats = collect(fh, args.min_margin, args.min_aln_len, args.min_aln_frac, args.min_identity,
-                              args.max_alns, dedup=not args.no_dedup)
+                              args.max_alns, dedup=not args.no_dedup, group_by_taxid=args.group_by_taxid)
     names = load_names(args.Names) if args.Names else {}
     with open(args.output, "w") as out:
         n_credible = write_table(refs, out, names, args.min_disc_reads, args.min_disc_breadth,

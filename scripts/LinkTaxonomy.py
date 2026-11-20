@@ -30,6 +30,9 @@ parser.add_option("--MapQuality", dest="MapQuality",
 parser.add_option("--Evidence", dest="Evidence",
                   help="Reference evidence table written by assess_references.py. When given, only references marked credible are reported, and each read is assigned to the credible reference it is compatible with (any equally best-scoring alignment in the PAF); a read compatible with several credible references is split between them in the proportion of their discriminatory reads (column Weight)")
 
+parser.add_option("--GroupByTaxid", dest="GroupByTaxid", action="store_true", default=False,
+                  help="Treat all references of one taxid (names <taxid>|<accession>) as one unit, as assess_references.py --group-by-taxid; the Evidence table then lists taxids")
+
 (options, args) = parser.parse_args()
 
 parents = {}
@@ -70,6 +73,11 @@ def taxon_trace(node):
             sys.exit(f"{node}\tSomething may be wrong!")
 
     return "|".join(reversed(rank)), "|".join(reversed(name_path))
+
+
+def ref_taxid(ref):
+    """Taxid of a reference named "<taxid>" or "<taxid>|<accession>"."""
+    return ref.split("|", 1)[0]
 
 
 def load_coverage(coverage_file, threshold):
@@ -218,6 +226,8 @@ def run():
     main()
 
     passing_taxids = load_coverage(options.Coverage, float(options.CovThreshold))
+    if options.GroupByTaxid:
+        passing_taxids = {ref_taxid(r) for r in passing_taxids}
     print(
         f"References passing coverage threshold (>= {options.CovThreshold}% of reference covered): {len(passing_taxids)}")
 
@@ -228,6 +238,9 @@ def run():
         print(f"References with credible discriminatory evidence: {len(credible)}; "
               f"passing the coverage threshold as well: {len(passing_taxids)}")
 
+    # unit: what credibility, assignment and splitting count; the taxid of the reference
+    # when references of one taxid are grouped, else the reference itself
+    unit = ref_taxid if options.GroupByTaxid else (lambda r: r)
     print("Loading PAF alignments...")
     if credible is None:
         best_hits = load_best_hits(options.PAF, options.MapQuality)
@@ -239,6 +252,7 @@ def run():
 
     # Count reads per reference (ref_name, taxId) for ranking
     ref_read_counts = d(int)
+    member_counts = d(lambda: d(int))   # unit -> reference -> reads, to name a unit's best reference
     ref_to_taxid = {}
     ref_to_name = {}
     ref_to_species = {}
@@ -257,7 +271,13 @@ def run():
         export.write(
             "SeqID\tTaxID\tLength\tMappingQuality\tdomain\tkingdom\tphylum\tclass\torder\tfamily\tgenus\tspecies\tsubspecies\tWeight\n")
         for seqId, lines, refs in hits:
-            members = [r for r in refs if r in passing_taxids and r in names]
+            units = []
+            for r in refs:
+                u = unit(r)
+                member_counts[u][r] += 1
+                if u not in units:
+                    units.append(u)
+            members = [u for u in units if u in passing_taxids and ref_taxid(u) in names]
             if not members:
                 n_unassigned += 1
                 continue
@@ -267,7 +287,8 @@ def run():
             if len(members) > 1:
                 n_shared += 1
             n_assigned += 1
-            for taxId, weight in split_weights(members, credible).items():
+            for ref, weight in split_weights(members, credible).items():
+                taxId = ref_taxid(ref)
                 name_path = name_path_of(taxId)
                 Tax = "\t".join(["_".join(x.split()) for x in name_path])
                 export.write(seqId + "\t" + taxId + "\t" + lines[1] + "\t" + lines[11] + "\t" +
@@ -276,8 +297,8 @@ def run():
             for ref_name in members:
                 ref_read_counts[ref_name] += 1
                 if ref_name not in ref_to_taxid:
-                    ref_path = name_path_of(ref_name)
-                    ref_to_taxid[ref_name] = ref_name
+                    ref_path = name_path_of(ref_taxid(ref_name))
+                    ref_to_taxid[ref_name] = ref_taxid(ref_name)
                     label = fallback_label(ref_path, options.TaxonomicHierarchy.lower())
                     ref_to_name[ref_name] = "_".join(label.split())
                     species_label = ref_path[7] if ref_path[7] != "NA" else "Unknown sp"
@@ -295,8 +316,11 @@ def run():
         ref_out.write(
             "ref_name\ttaxid\ttaxon_name\tspecies_name\tsubspecies_name\tread_count\n")
         for ref_name, count in sorted(ref_read_counts.items(), key=lambda x: -x[1]):
+            # a grouped unit is shown by its reference with the most reads (a PAF target name)
+            shown = max(member_counts[ref_name].items(), key=lambda x: (x[1], x[0]))[0] \
+                if options.GroupByTaxid else ref_name
             ref_out.write(
-                f"{ref_name}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{ref_to_subspecies[ref_name]}\t{count}\n")
+                f"{shown}\t{ref_to_taxid[ref_name]}\t{ref_to_name[ref_name]}\t{ref_to_species[ref_name]}\t{ref_to_subspecies[ref_name]}\t{count}\n")
 
     print(f"Reference summary written to: {options.OUT}.ref_summary.txt")
 

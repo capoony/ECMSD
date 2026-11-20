@@ -16,6 +16,11 @@ appended to each written line:
   nc:i:N   number of references the read is compatible with (1 = unique best)
   dm:i:D   top AS minus the best AS on any other reference, only present when a
            lower-scoring competing reference was reported
+  dt:i:D   like dm, but only over references of another taxid than all compatible ones
+           (reference names "<taxid>|<accession>"; a bare name is its own taxid). Only
+           written when it differs from dm, i.e. when several references of one taxid
+           (haplotypes of a species) are in the database; -1 = no lower-scoring
+           reference of another taxid was reported
   na:i:A   number of alignments minimap2 reported for the read (all references). When
            this reaches the -N limit the list of competitors is truncated, so a unique
            best alignment is only provisional
@@ -94,7 +99,7 @@ def select_best(paf_in, paf_out, table_out=None, one_per_read=False, min_mapq=0,
     check_quality = bool(min_aln_len or min_aln_frac or min_identity)
 
     # State of the read being read. by_ref maps each reference to its best alignment
-    # [rank_key, line, tp, AS, NM, index, mapq]; the whole group is only kept for the table.
+    # [rank_key, line, tp, AS, NM, index, mapq, taxid]; the whole group is only kept for the table.
     name = None
     by_ref = {}
     n = 0
@@ -111,9 +116,12 @@ def select_best(paf_in, paf_out, table_out=None, one_per_read=False, min_mapq=0,
             compat = [e for e in entries if e[3] == top]
             lower = [e[3] for e in scored if e[3] < top]
             margin = top - max(lower) if lower else None
+            top_taxa = {e[7] for e in compat}
+            lower_other = [e[3] for e in scored if e[3] < top and e[7] not in top_taxa]
+            margin_taxid = top - max(lower_other) if lower_other else None
         else:
             stats["reads_no_AS"] += 1
-            top = margin = None
+            top = margin = margin_taxid = None
             compat = [min(entries, key=lambda e: (e[0], e[5]))]
         best = min(compat, key=lambda e: (e[0], e[5]))
         if n > 1:
@@ -150,6 +158,8 @@ def select_best(paf_in, paf_out, table_out=None, one_per_read=False, min_mapq=0,
                 stats["lines_out"] += 1
             else:
                 tags = ("\tnc:i:%d" % len(compat) + ("" if margin is None else "\tdm:i:%d" % margin)
+                        + ("" if margin_taxid == margin else
+                           "\tdt:i:%d" % (-1 if margin_taxid is None else margin_taxid))
                         + "\tna:i:%d" % n)
                 for e in compat:
                     out.write(e[1][:-1] + tags + "\n")
@@ -195,7 +205,7 @@ def select_best(paf_in, paf_out, table_out=None, one_per_read=False, min_mapq=0,
             key = rank_key(tp, AS, NM)
             cur = by_ref.get(f[5])
             if cur is None or key < cur[0]:
-                by_ref[f[5]] = [key, line, tp, AS, NM, n, mapq]
+                by_ref[f[5]] = [key, line, tp, AS, NM, n, mapq, f[5].split("|", 1)[0]]
             if tbl:
                 group.append((line, tp, AS, NM))
             n += 1
