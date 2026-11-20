@@ -33,16 +33,16 @@ ALL ARGUMENTS:
   -u | --cov-threshold THRESHOLD            Minimum % of reference covered by reads to retain it (default: 25)
   -n | --top-n N                            Number of top references to generate alignment plots for (default: 25)
   -q | --mapping_quality QUALITY            Drop reads whose best alignments all have a lower MAPQ (default: 0 = no MAPQ filtering)
-     | --seed-k K                           minimap2 k-mer size for both mapping stages (default: 17)
-     | --seed-w W                           minimap2 minimizer window size for both mapping stages (default: 7)
-     | --min-chain-score M                   minimap2 minimal chaining score -m for both stages; higher values make Stage 1 stricter and Stage 2 faster (default: 20)
-     | --max-alns N                          Stage 2: maximum number of secondary alignments per read, minimap2 -N (default: 20)
+     | --seed-k K                           minimap2 k-mer size (default: 17)
+     | --seed-w W                           minimap2 minimizer window size (default: 7)
+     | --min-chain-score M                   minimap2 minimal chaining score -m; higher values align fewer weak reads and map faster (default: 20)
+     | --max-alns N                          Maximum number of secondary alignments per read, minimap2 -N (default: 20)
      | --min-disc-reads N                    A reference is only reported when at least N reads discriminate it from all other references (default: 20)
      | --min-disc-breadth PCT                ... and these reads cover at least PCT % of the reference (default: 5)
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
      | --min-aln-len N                       Minimum alignment length in bp of a read that counts as discriminatory evidence; lower it for very short reads (default: 20)
      | --no-dedup                            Count PCR duplicates (same references, start, end and strand) as separate reads in the evidence table
-     | --keep-all-alignments                 Stage 2: also keep every alignment (all_alignments PAF and a table with tp, AS, NM, MAPQ); large and slower
+     | --keep-all-alignments                 Also keep every alignment (all_alignments PAF and a table with tp, AS, NM, MAPQ); large and slower
   -p | --prefix PREFIX                      Prefix for output files (default: None)
   -t | --threads THREADS                    Number of threads to use (default: THREADS = 10)
   -x | --taxonomic-hierarchy HIERARCHY      Taxonomic hierarchy: subspecies, species, genus, family, order, class, phylum, kingdom or domain (default: HIERARCHY = species)
@@ -52,12 +52,11 @@ ALL ARGUMENTS:
   -d | --db-folder DB_FOLDER                Folder for the database
   -b | --force-rebuild                      Discard an existing database and rebuild it from scratch (implies --create-db)
 
-Mapping is done in two stages: Stage 1 maps all reads liberally (no MAPQ filter, no base-level
-alignment) to find candidate mitochondrial reads; Stage 2 remaps only those candidates with
-base-level alignment (-c) and secondary alignments, and keeps all best-scoring alignments of
-each read by alignment score (AS), not by MAPQ. A reference is only reported when reads that
-discriminate it from the other references support it (see --min-disc-*), not when it merely
-shares reads with a reference that is present.
+All reads are mapped once with base-level alignment (-c) and secondary alignments, and all
+best-scoring alignments of each read are kept by alignment score (AS), not by MAPQ. A
+reference is only reported when reads that discriminate it from the other references
+support it (see --min-disc-*), not when it merely shares reads with a reference that is
+present.
 
 Example:
   ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db
@@ -406,45 +405,27 @@ mkdir -p "${Output}/logs"
 ###############################################################################
 #                        Mapping Functions                                    #
 ###############################################################################
-# Chaining thresholds shared by both stages. The sr preset requires a chaining score
-# of 25 (-m) and a peak score of 40 (-s), which discards most reads below ~30 bp.
-# -m 20 (default, --min-chain-score) keeps short historical DNA fragments while
-# Stage 1 does not pass reads that can only form a very weak chain; -n 1 leaves
-# -m as the only chaining limit and -s 20 does not cut short but perfect alignments.
-# Both stages use the same values so Stage 2 does not lose reads Stage 1 found.
+# Chaining thresholds. The sr preset requires a chaining score of 25 (-m) and a peak
+# score of 40 (-s), which discards most reads below ~30 bp. -m 20 (default,
+# --min-chain-score) keeps short historical DNA fragments while reads that can only
+# form a very weak chain are not aligned; -n 1 leaves -m as the only chaining limit
+# and -s 20 does not cut short but perfect alignments.
 MM2_SHORT=(-n 1 -m "${chain_score}" -s 20)
 
-# Stage 1: liberal screen. No MAPQ filter, no -c, no secondary alignments. Only the
-# names of reads with at least one alignment are kept (MAPQ 0 included); no PAF is
-# stored. Accepts one or more read files.
-run_stage1() {
-    echo "Stage 1: screening for mitochondrial reads: $*" >&2
-    minimap2 \
-        -x sr \
-        -k "${seed_k}" -w "${seed_w}" "${MM2_SHORT[@]}" \
-        --secondary=no \
-        -t "${threads}" "${REF}" "$@" \
-        2> "${Output}/logs/minimap2_stage1.log" |
-        cut -f1 | uniq
-
-    echo "Minimap2 Stage 1 log:" >&2
-    cat "${Output}/logs/minimap2_stage1.log" >&2
-}
-
-# Stage 2: accurate mapping of the candidate reads against the full database.
+# Single mapping pass of the original read files against the full database.
 # Base-level alignment (-c) and secondary alignments; nothing is removed by MAPQ.
-run_stage2() {
-    echo "Stage 2: remapping candidate reads: $*" >&2
+run_mapping() {
+    echo "Mapping reads: $*" >&2
     minimap2 \
         -x sr \
         -k "${seed_k}" -w "${seed_w}" "${MM2_SHORT[@]}" \
         --secondary=yes -N "${max_alns}" \
         -c \
         -t "${threads}" "${REF}" "$@" \
-        2> "${Output}/logs/minimap2_stage2.log"
+        2> "${Output}/logs/minimap2.log"
 
-    echo "Minimap2 Stage 2 log:" >&2
-    cat "${Output}/logs/minimap2_stage2.log" >&2
+    echo "Minimap2 log:" >&2
+    cat "${Output}/logs/minimap2.log" >&2
 }
 
 ###############################################################################
@@ -456,10 +437,9 @@ PAF="${Output}/mapping/Mito.paf"
 if [[ -n "${prefix}" ]]; then
     PAF="${Output}/mapping/${prefix}_Mito.paf"
 fi
-# Stage 1 hit names, Stage 2 candidate reads and the unfiltered Stage 2 output
-STAGE1_BASE="${PAF%.paf}_stage1"
-STAGE2_ALL="${PAF%.paf}_stage2_all_alignments.paf.gz"
-STAGE2_TABLE="${PAF%.paf}_stage2_alignments.tsv.gz"
+# Unfiltered mapping output and alignment table (only with --keep-all-alignments)
+ALL_ALNS="${PAF%.paf}_all_alignments.paf.gz"
+ALN_TABLE="${PAF%.paf}_alignments.tsv.gz"
 
 if [[ "${skip_mapping}" == "yes" ]]; then
     echo "Skipping mapping step — using existing ${PAF}.gz"
@@ -468,7 +448,7 @@ if [[ "${skip_mapping}" == "yes" ]]; then
         exit 1
     fi
 else
-    # Original read files for Stage 1 (merged and single-end: one file; paired-end: two)
+    # Original read files (merged and single-end: one file; paired-end: two)
     if [[ -n "${merged}" ]]; then
         echo "Mapping merged reads..."
         reads_in=("${merged}")
@@ -479,30 +459,20 @@ else
         echo "Mapping paired-end reads..."
         reads_in=("${fwd}" "${rev}")
     fi
-    if [[ ${#reads_in[@]} -eq 2 ]]; then
-        cand_out=("${STAGE1_BASE}_candidates_R1.fastq.gz" "${STAGE1_BASE}_candidates_R2.fastq.gz")
-    else
-        cand_out=("${STAGE1_BASE}_candidates.fastq.gz")
-    fi
 
-    # Stage 1: liberal screen, then extract the candidates from the ORIGINAL FASTQ files
-    run_stage1 "${reads_in[@]}" >"${STAGE1_BASE}_hits.txt"
-    python3 "${SCRIPT_DIR}/extract_candidates.py" \
-        --hits "${STAGE1_BASE}_hits.txt" --in "${reads_in[@]}" --out "${cand_out[@]}"
-
-    # Stage 2: remap only the candidates, keep all best-scoring (by AS) alignments of each read
-    # By default the Stage 2 output (tens of millions of lines for deep samples) is
-    # streamed straight into the best-alignment selection and never written to disk.
-    if [[ ! -s "${STAGE1_BASE}_hits.txt" ]]; then
-        echo "Warning: Stage 1 found no candidate mitochondrial reads; skipping Stage 2."
-        : | python3 "${SCRIPT_DIR}/select_best_alignments.py" --min-mapq "${quality}" - "${PAF}.gz"
-    elif [[ "${keep_all}" == "yes" ]]; then
-        run_stage2 "${cand_out[@]}" | gzip >"${STAGE2_ALL}"
+    # Keep all best-scoring (by AS) alignments of each read. By default the mapping
+    # output (tens of millions of lines for deep samples) is streamed straight into
+    # the best-alignment selection and never written to disk.
+    if [[ "${keep_all}" == "yes" ]]; then
+        run_mapping "${reads_in[@]}" | gzip >"${ALL_ALNS}"
         python3 "${SCRIPT_DIR}/select_best_alignments.py" --min-mapq "${quality}" \
-            "${STAGE2_ALL}" "${PAF}.gz" --table "${STAGE2_TABLE}"
+            "${ALL_ALNS}" "${PAF}.gz" --table "${ALN_TABLE}"
     else
-        run_stage2 "${cand_out[@]}" |
+        run_mapping "${reads_in[@]}" |
             python3 "${SCRIPT_DIR}/select_best_alignments.py" --min-mapq "${quality}" - "${PAF}.gz"
+    fi
+    if [[ -z "$(gzip -cd "${PAF}.gz" | head -c 1)" ]]; then
+        echo "Warning: no read aligned to the mitochondrial database."
     fi
 fi
 
