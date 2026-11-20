@@ -68,7 +68,8 @@ WINDOW = 1000  # bp; window of discriminatory_windows and max_1kb_share
 HEADER = ["reference", "taxon_name", "ref_length", "compatible_reads", "discriminatory_reads",
           "weak_unique_reads", "shared_reads", "discriminatory_at_limit", "compatible_breadth", "discriminatory_breadth",
           "compatible_depth", "discriminatory_depth", "compatible_evenness",
-          "discriminatory_evenness", "breadth_ratio", "discriminatory_windows", "window_ratio", "max_1kb_share", "discriminatory_identity", "discriminatory_exact", "edit_distance_decline", "duplicate_fraction", "credible", "reason"]
+          "discriminatory_evenness", "breadth_ratio", "discriminatory_windows", "window_ratio", "max_1kb_share", "discriminatory_identity", "discriminatory_exact", "edit_distance_decline", "duplicate_fraction", "credible", "reason",
+          "credible_overlap", "call_status", "call_group", "call_reason"]
 
 
 def opener(path, encoding=None):
@@ -147,7 +148,7 @@ def good_quality(a, min_aln_len, min_aln_frac, min_identity):
 
 
 class RefEvidence:
-    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins", "dnm", "dalen", "dn", "dexact", "dhist", "dups", "dsub")
+    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins", "dnm", "dalen", "dn", "dexact", "dhist", "dups", "dsub", "co")
 
     def __init__(self, length):
         self.length = length
@@ -158,6 +159,7 @@ class RefEvidence:
         self.dhist = [0] * 4                                 # reads with NM 0, 1, 2, 3
         self.dups = 0                                        # compatible reads skipped as PCR duplicates
         self.dsub = {}                                       # SUBWIN bp bin of the read midpoint -> discriminatory reads
+        self.co = {}                                         # other reference -> reads compatible with both
 
     def add_identity(self, a):
         """Count a discriminatory read in the identity (reads without NM are skipped)."""
@@ -241,6 +243,9 @@ def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.
             if a[0] not in counted:
                 counted.add(a[0])
                 ev.compat += 1
+                for other in compat_refs:
+                    if other != a[0]:
+                        ev.co[other] = ev.co.get(other, 0) + 1
                 if unique:
                     if discriminatory:
                         ev.disc += 1
@@ -341,16 +346,84 @@ def fmt(x, digits):
     return "NA" if x is None else "%.*f" % (digits, x)
 
 
-def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio=0.0):
+def jaccard(refs, a, b):
+    """Share of the reads compatible with a or b that are compatible with both."""
+    both = refs[a].co.get(b, 0)
+    union = refs[a].compat + refs[b].compat - both
+    return both / union if union else 0.0
+
+
+def call(refs, metrics, credible, min_disc_reads, min_decline=0.9, min_breadth_ratio=0.5, max_overlap=0.5):
+    """Label the credible references: {ref: (overlap, status, group, reason)}. With --group-by-taxid
+    the references are taxid units, so overlap, decline and breadth ratio are per unit.
+
+    poor_fit      edit distance decline < min_decline, or the discriminatory reads cover less than
+                  min_breadth_ratio of the breadth expected from their depth (reads from one region)
+    ambiguous     shares more than max_overlap (Jaccard) of its compatible reads with another credible
+                  reference; such references are linked into one group (single linkage)
+    low_evidence  credible only through discriminatory reads at the -N limit
+    confident     none of the above. poor_fit outranks ambiguous, which outranks low_evidence.
+    """
+    cred = sorted(credible, key=lambda r: (-refs[r].disc, r))
+    parent = {r: r for r in cred}
+
+    def root(r):
+        while parent[r] != r:
+            r = parent[r]
+        return r
+
+    overlap = {r: [] for r in cred}
+    for i, a in enumerate(cred):
+        for b in cred[i + 1:]:
+            j = jaccard(refs, a, b)
+            if j >= 0.05:
+                overlap[a].append((b, j))
+                overlap[b].append((a, j))
+            if j > max_overlap:
+                parent[root(b)] = root(a)
+    members = {}
+    for r in cred:
+        members.setdefault(root(r), []).append(r)
+    gid = {}
+    for n, (rt, ms) in enumerate((x for x in members.items() if len(x[1]) > 1), 1):
+        for r in ms:
+            gid[r] = "G%d" % n
+    out = {}
+    for r in cred:
+        ev, m = refs[r], metrics[r]
+        ratio = m["breadth_ratio"]
+        poor, why = [], []
+        if m["decline"] is not None and m["decline"] < min_decline:
+            poor.append("edit_distance_decline<%g" % min_decline)
+        if ratio is not None and ratio < min_breadth_ratio:
+            poor.append("breadth_ratio<%g" % min_breadth_ratio)
+        low = ev.disc - ev.limit < min_disc_reads
+        if r in gid:
+            why.append("shares>%g_with:%s" % (max_overlap, ",".join(x for x in members[root(r)] if x != r)))
+        if low:
+            why.append("credible_only_with_reads_at_N_limit")
+        status = "poor_fit" if poor else "ambiguous" if r in gid else "low_evidence" if low else "confident"
+        out[r] = (",".join("%s:%.2f" % (b, j) for b, j in sorted(overlap[r], key=lambda x: -x[1])) or "-",
+                  status, gid.get(r, "-"), ";".join(poor + why) or "-")
+    return out
+
+
+def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio=0.0,
+                **call_args):
     n_credible = 0
-    rows = []
+    rows, metrics, credible = [], {}, []
     for ref, ev in refs.items():
         m, ok, reasons = judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio)
         n_credible += ok
+        metrics[ref] = m
+        if ok:
+            credible.append(ref)
         rows.append((ev.disc, ev.compat, ref, ev, m, ok, reasons))
+    calls = call(refs, metrics, credible, min_disc_reads, **call_args)
     rows.sort(key=lambda r: (-r[0], -r[1], r[2]))
     out.write("\t".join(HEADER) + "\n")
     for _, _, ref, ev, m, ok, reasons in rows:
+        ovl, status, group, why = calls.get(ref, ("-", "not_credible", "-", "-"))
         out.write("\t".join([
             ref, names.get(ref_taxid(ref), "NA").replace(" ", "_"), str(ev.length), str(ev.compat), str(ev.disc),
             str(ev.weak), str(ev.compat - ev.disc - ev.weak), str(ev.limit),
@@ -360,7 +433,8 @@ def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_eve
             fmt(m["breadth_ratio"], 3), fmt(m["disc_windows"], 3), fmt(m["window_ratio"], 3), fmt(m["max_1kb"], 3),
             fmt(m["disc_ident"], 4), fmt(m["disc_exact"], 3),
             fmt(m["decline"], 3), fmt(m["dup_frac"], 3),
-            "yes" if ok else "no", "pass" if ok else ";".join(reasons)]) + "\n")
+            "yes" if ok else "no", "pass" if ok else ";".join(reasons),
+            ovl, status, group, why]) + "\n")
     return n_credible
 
 
@@ -391,6 +465,12 @@ def main(argv=None):
                    help="count all references of one taxid (names <taxid>|<accession>) as one unit")
     p.add_argument("--min-window-ratio", type=float, default=0.5,
                    help="credible: minimum ratio of the fraction of 1 kb windows hit by discriminatory reads to the fraction expected for as many reads placed at random; 0 disables (default: 0.5)")
+    p.add_argument("--min-decline", type=float, default=0.9,
+                   help="call: poor_fit below this edit distance decline of the discriminatory reads (default: 0.9)")
+    p.add_argument("--min-breadth-ratio", type=float, default=0.5,
+                   help="call: poor_fit when the discriminatory breadth is below this fraction of the breadth expected from their depth (default: 0.5)")
+    p.add_argument("--max-overlap", type=float, default=0.5,
+                   help="call: credible references sharing more than this fraction (Jaccard) of their compatible reads form an ambiguous group (default: 0.5)")
     args = p.parse_args(argv)
 
     with opener(args.PAF) as fh:
@@ -399,7 +479,8 @@ def main(argv=None):
     names = load_names(args.Names) if args.Names else {}
     with open(args.output, "w") as out:
         n_credible = write_table(refs, out, names, args.min_disc_reads, args.min_disc_breadth,
-                                 args.min_disc_evenness, args.min_window_ratio)
+                                 args.min_disc_evenness, args.min_window_ratio, min_decline=args.min_decline,
+                                 min_breadth_ratio=args.min_breadth_ratio, max_overlap=args.max_overlap)
     print(f"Reference evidence: {stats['reads']} reads ({stats['duplicates']} PCR duplicates skipped), {stats['shared']} shared between references, "
           f"{stats['discriminatory']} discriminatory, {stats['weak']} with a unique but weak best alignment; "
           f"{n_credible} of {len(refs)} references credible. Written to: {args.output}")

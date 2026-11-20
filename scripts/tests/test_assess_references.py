@@ -264,5 +264,82 @@ def self_lines():
     return lines
 
 
+class CallTests(unittest.TestCase):
+
+    @staticmethod
+    def calls(lines, **kw):
+        refs, _ = collect(lines)
+        metrics, cred = {}, []
+        for r, ev in refs.items():
+            m, ok, _ = ar.judge(ev, 20, 1, 0)
+            metrics[r] = m
+            if ok:
+                cred.append(r)
+        return ar.call(refs, metrics, cred, 20, **kw)
+
+    def test_clean_spread_reads_are_confident(self):
+        c = self.calls([aln(f"d{i}", "A", i * 19, dm=20) for i in range(50)])
+        self.assertEqual(c["A"][1], "confident")
+
+    def test_mismatch_hump_is_poor_fit(self):
+        # most reads with 2 mismatches: not the decline expected from sequencing errors
+        lines = [aln(f"d{i}", "A", i * 19, dm=20, NM=2 if i % 5 else 0) for i in range(50)]
+        c = self.calls(lines)
+        self.assertEqual(c["A"][1], "poor_fit")
+        self.assertIn("edit_distance_decline", c["A"][3])
+
+    def test_deep_reads_in_one_region_are_poor_fit(self):
+        # 50 reads stacked on 100 bp: depth 2.5x expects ~92% breadth, observed ~10%
+        c = self.calls([aln(f"d{i}", "A", i, dm=20) for i in range(50)])
+        self.assertEqual(c["A"][1], "poor_fit")
+        self.assertIn("breadth_ratio", c["A"][3])
+
+    def test_references_sharing_most_reads_form_a_group(self):
+        lines = []
+        for i in range(100):
+            lines += [aln(f"s{i}", "A", i * 9, nc=2), aln(f"s{i}", "B", i * 9, nc=2)]
+        lines += [aln(f"a{i}", "A", i * 19, dm=20) for i in range(30)]
+        lines += [aln(f"b{i}", "B", i * 19, dm=20) for i in range(30)]
+        c = self.calls(lines)
+        self.assertEqual((c["A"][1], c["B"][1]), ("ambiguous", "ambiguous"))
+        self.assertEqual(c["A"][2], c["B"][2])
+        self.assertTrue(c["A"][0].startswith("B:0.6"))
+
+    def test_rare_species_sharing_conserved_reads_with_dominant_one_stays_separate(self):
+        lines = [aln(f"a{i}", "A", i % 50 * 19, dm=20) for i in range(500)]
+        for i in range(60):
+            lines += [aln(f"s{i}", "A", i * 9, nc=2), aln(f"s{i}", "B", i * 9, nc=2)]
+        lines += [aln(f"b{i}", "B", i * 19, dm=20) for i in range(25)]
+        c = self.calls(lines)
+        self.assertEqual(c["B"][2], "-")
+        self.assertEqual(c["B"][1], "confident")
+
+    def test_evidence_only_at_the_N_limit_is_low_evidence(self):
+        c = self.calls([aln(f"d{i}", "A", i * 19, dm=20, na=21 if i < 40 else 3) for i in range(50)])
+        self.assertEqual(c["A"][1], "low_evidence")
+
+
+    def test_labels_are_per_taxid_unit_when_grouping(self):
+        # two haplotypes of taxid 1 and a reference of taxid 2; 100 reads fit all three
+        lines = []
+        for i in range(100):
+            lines += [aln(f"s{i}", r, i * 9, nc=3) for r in ("1|x", "1|y", "2")]
+        lines += [aln(f"x{i}", "1|x", i * 19, dm=20) for i in range(30)]
+        lines += [aln(f"y{i}", "1|y", i * 19 + 7, dm=20) for i in range(30)]
+        lines += [aln(f"t{i}", "2", i * 19, dm=20) for i in range(30)]
+        refs, _ = collect(lines, group_by_taxid=True)
+        self.assertEqual(set(refs), {"1", "2"})
+        metrics, cred = {}, []
+        for r, ev in refs.items():
+            m, ok, _ = ar.judge(ev, 20, 1, 0)
+            metrics[r] = m
+            cred.append(r) if ok else None
+        c = ar.call(refs, metrics, cred, 20)
+        # unit 1: 60 discriminatory, 160 compatible; Jaccard to unit 2 = 100 / 190 > 0.5
+        self.assertEqual(refs["1"].disc, 60)
+        self.assertEqual((c["1"][1], c["2"][1]), ("ambiguous", "ambiguous"))
+        self.assertTrue(c["1"][0].startswith("2:0.53"))
+
+
 if __name__ == "__main__":
     unittest.main()
