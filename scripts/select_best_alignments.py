@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Select the best-scoring ("compatible") alignments of each read from the Stage 2 ECMSD PAF.
+"""Select the best-scoring ("compatible") alignments of each read from the ECMSD PAF.
 
-Stage 2 maps the candidate reads with `minimap2 -c --secondary=yes -N <n>`, so a
+ECMSD maps the reads with `minimap2 -c --secondary=yes -N <n>`, so a
 read can have several alignments to different references. They are compared by
 alignment score (AS), never by MAPQ: closely related mitogenomes give a correct
 alignment a low MAPQ (even 0), and MAPQ is not used to rank anything.
@@ -217,7 +217,7 @@ def select_best(paf_in, paf_out, table_out=None, one_per_read=False, min_mapq=0,
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("paf_in", help="Stage 2 PAF (plain or .gz, or '-' for stdin), made with minimap2 -c")
+    p.add_argument("paf_in", help="ECMSD PAF (plain or .gz, or '-' for stdin), made with minimap2 -c")
     p.add_argument("paf_out", help="output PAF (.gz gives gzip, '-' stdout)")
     p.add_argument("--table", help="optional TSV (.gz allowed) listing every alignment with its tags")
     p.add_argument("--one-per-read", action="store_true",
@@ -236,7 +236,7 @@ def main(argv=None):
                     args.min_aln_len, args.min_aln_frac, args.min_identity)
     dropped = (s["reads_low_mapq"] + s["reads_short"] + s["reads_low_fraction"]
                + s["reads_low_identity"])
-    summary = (f"Stage 2 alignments: {s['lines']} for {s['reads']} reads; "
+    summary = (f"Alignments: {s['lines']} for {s['reads']} reads; "
                f"{s['reads_multi']} reads with several alignments ({s['reads_AS_tie']} tied on AS "
                f"between references); {s['best_secondary']} reads whose best-AS alignment is a secondary one. "
                f"Written: {s['lines_out']} alignments of {s['reads_out']} reads")

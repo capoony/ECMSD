@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-reference evidence for the taxonomic assignment of the Stage 2 ECMSD PAF.
+"""Per-reference evidence for the taxonomic assignment of the ECMSD PAF.
 
 Input is the PAF written by select_best_alignments.py: for every read the alignments
 to all references that tie for its best alignment score (AS), tagged with nc (number
@@ -54,7 +54,7 @@ whose length is that of its longest reference.
 A unique best alignment is only provisional evidence: minimap2 reports a limited number
 of secondary alignments chosen before base-level alignment, so a better or equal
 reference may not have been reported for a read. Discriminatory reads for which the
-number of reported alignments exceeds --max-alns (the minimap2 -N of Stage 2) are counted
+number of reported alignments exceeds --max-alns (the minimap2 -N of the mapping) are counted
 in the column discriminatory_at_limit.
 """
 import argparse
@@ -440,7 +440,7 @@ def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_eve
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--PAF", required=True, help="Stage 2 PAF from select_best_alignments.py (plain or .gz)")
+    p.add_argument("--PAF", required=True, help="ECMSD PAF from select_best_alignments.py (plain or .gz)")
     p.add_argument("--output", required=True, help="evidence table (TSV)")
     p.add_argument("--Names", help="NCBI names.dmp, only used to add the scientific name to the table")
     p.add_argument("--min-margin", type=int, default=10,
@@ -452,7 +452,7 @@ def main(argv=None):
     p.add_argument("--min-identity", type=float, default=0.9,
                    help="minimum identity, 1 - NM/alignment length, of a discriminatory read (default: 0.9)")
     p.add_argument("--max-alns", type=int, default=20,
-                   help="the minimap2 -N used in Stage 2; discriminatory reads with more reported alignments are counted as at the limit (default: 20)")
+                   help="the minimap2 -N used for mapping; discriminatory reads with more reported alignments are counted as at the limit (default: 20)")
     p.add_argument("--no-dedup", action="store_true",
                    help="count PCR duplicates (reads with the same references, start, end and strand) as separate reads")
     p.add_argument("--min-disc-reads", type=int, default=20,
