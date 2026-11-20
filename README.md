@@ -6,20 +6,20 @@ ECMSD (Efficient Comprehensive Mitochondrial Sequence Detection) is a bioinforma
 
 ## Features
 
-- **Fast mitochondrial sequence detection** using minimap2 alignment
-- **Curated reference database** built from complete, reviewed NCBI RefSeq mitochondrial genomes (`NC_` accessions only)
-- **Taxonomic classification** with customizable hierarchy levels
-- **Quality-based filtering** with configurable mapping quality thresholds
-- **Coverage-based reference filtering**: only references with sufficient breadth of coverage are retained
-- **Automated visualization** of results with R-based plotting
-- **Support for multiple input formats**: single-end, paired-end, and merged reads
-- **Decoupled database management**: the reference database is built once and shared across runs
+- Fast mitochondrial sequence detection with minimap2
+- A reference database of complete, reviewed NCBI RefSeq mitochondrial genomes (`NC_` accessions only)
+- Taxonomic classification at a hierarchy level you choose
+- Configurable mapping quality threshold
+- Only references with sufficient breadth of coverage are retained
+- Plots of the results, made with R
+- Single-end, paired-end and merged reads as input
+- The reference database is built once and shared across runs
 
 ## Pipeline Workflow
 
 The workflow has two distinct phases:
 
-### Phase 1 — One-time database setup
+### Phase 1: one-time database setup
 
 Build the reference database before running any analysis:
 
@@ -29,7 +29,7 @@ ECMSD --create-db --db-folder /path/to/db_folder
 
 This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxonomy database. It only needs to be run once (add `--force-rebuild` when you want to refresh the reference data). The database folder can then be shared across all subsequent analysis runs and across multiple parallel jobs.
 
-### Phase 2 — Per-sample analysis
+### Phase 2: per-sample analysis
 
 1. **Mapping**: Maps all reads once to the complete mitochondrial database with minimap2, using sensitive seeds (`-k 17 -w 7`), relaxed chaining (`-n 1 -m 20 -s 20`), base-level alignment (`-c`) and secondary alignments (`--secondary=yes -N 20`), without MAPQ filtering (MAPQ 0 is kept). The output is streamed straight into the best-alignment selection, so the very large all-alignments file is not stored. For each read all alignments with the best alignment score (`AS`) are kept (ties included), never ranked by MAPQ
 2. **Reference Evidence**: For each reference, separates reads that are *compatible* with it (it has the best `AS`, possibly tied with other references) from reads that *discriminate* it from all other references. A reference is only reported when enough discriminatory reads, spread over enough of its genome, support it (see [Taxonomic assignment](#taxonomic-assignment))
@@ -54,7 +54,7 @@ This downloads and processes NCBI RefSeq mitochondrial genomes and the NCBI taxo
 
 ## Installation
 
-### Recommended — Install via Bioconda
+### Recommended: install via Bioconda
 
 ```bash
 conda create -n ecmsd_env -c bioconda -c conda-forge ecmsd
@@ -63,19 +63,19 @@ conda activate ecmsd_env
 
 This installs ECMSD and all dependencies in a single step.
 
-### Alternative — Manual installation via `install.sh`
+### Alternative: manual installation via `install.sh`
 
 <details>
 <summary>Click to expand manual installation steps</summary>
 
-**Step 1 — Clone the repository**
+**Step 1: clone the repository**
 
 ```bash
 git clone https://github.com/capoony/ECMSD.git
 cd ECMSD
 ```
 
-**Step 2 — Create and activate a conda environment**
+**Step 2: create and activate a conda environment**
 
 You can use the provided environment file:
 
@@ -91,7 +91,7 @@ conda create -n ecmsd_env
 conda activate ecmsd_env
 ```
 
-**Step 3 — Install dependencies and scripts**
+**Step 3: install dependencies and scripts**
 
 With your conda environment active, run the installation script:
 
@@ -101,7 +101,7 @@ bash shell/install.sh
 
 This installs all required dependencies (minimap2, bbmap, R, Python packages, etc.) into the active conda environment and registers the `ECMSD` command.
 
-**Alternative — let `install.sh` create a new local environment**
+**Alternative: let `install.sh` create a new local environment**
 
 Instead of steps 2 and 3, you can give `install.sh` a path with `--prefix` (`-p`). It creates a new conda environment at that location (e.g. on a shared project drive), installs all dependencies and registers `ECMSD` there. No active conda environment is needed:
 
@@ -122,9 +122,9 @@ Regardless of the installation method, the reference database must be created be
 ECMSD --create-db --db-folder /path/to/db_folder
 ```
 
-The database folder can be placed anywhere and reused across all future runs. This step downloads several GB of data from NCBI, so ensure sufficient disk space (~5–10 GB during the build) and a stable internet connection. Build intermediates are deleted once the database is complete, leaving a finished folder of well under 1 GB.
+The database folder can be placed anywhere and reused across all future runs. This step downloads several GB of data from NCBI, so ensure sufficient disk space (about 5 to 10 GB during the build) and a stable internet connection. Build intermediates are deleted once the database is complete, leaving a finished folder of well under 1 GB.
 
-Running `--create-db` against an existing, complete database is a no-op — it reports the database as ready and exits without re-downloading anything. This makes it safe to call unconditionally at the start of a workflow. To refresh the reference data against the current NCBI release, add `--force-rebuild`:
+Running `--create-db` against an existing, complete database is a no-op: it reports the database as ready and exits without re-downloading anything. This makes it safe to call unconditionally at the start of a workflow. To refresh the reference data against the current NCBI release, add `--force-rebuild`:
 
 ```bash
 ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
@@ -133,7 +133,7 @@ ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
 This discards the existing database files and downloads everything again. Only files ECMSD created are removed, so a database folder shared with other content is left otherwise intact. Do not use `--force-rebuild` while other ECMSD jobs are reading the same database folder.
 
 > **Why is the database a separate step?**
-> Separating database creation from analysis prevents race conditions when multiple ECMSD instances run in parallel (e.g. in a Snakemake workflow). In the old design, all parallel jobs would compete to create the same database simultaneously. By building the database once upfront, each analysis job simply reads from the shared, pre-built database. This also enables pipelines such as the **[pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)** to run contamination checks from scratch, downloading all required reference files in a single dedicated setup step before launching parallel analysis jobs.
+> Separating database creation from analysis prevents race conditions when multiple ECMSD instances run in parallel (e.g. in a Snakemake workflow). If each job built its own database, they would compete to create the same files. Because the database is built once upfront, each analysis job only reads from the shared, pre-built database. This also enables pipelines such as the **[pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)** to run contamination checks from scratch, downloading all required reference files in a single dedicated setup step before launching parallel analysis jobs.
 
 ### What goes into the reference database
 
@@ -144,8 +144,8 @@ RefSeq accession prefixes encode how a sequence was produced and how much curati
 
 | Prefix | Meaning                                                                                                                                                                                                              | Kept? |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `NC_`  | Complete genomic molecule, curated RefSeq — a finished, reviewed mitogenome that someone deliberately sequenced, assembled and checked                                                                              | ✅    |
-| `NW_`  | Unplaced/unlocalised genomic scaffold, auto-generated from a whole-genome shotgun assembly — a leftover contig that automated screening flagged as mitochondrial, with no curation and no guarantee of completeness | ❌    |
+| `NC_`  | Complete genomic molecule, curated RefSeq: a finished, reviewed mitogenome that someone deliberately sequenced, assembled and checked                                                                               | Yes   |
+| `NW_`  | Unplaced/unlocalised genomic scaffold, auto-generated from a whole-genome shotgun assembly: a leftover contig that automated screening flagged as mitochondrial, with no curation and no guarantee of completeness  | No    |
 
 For reference, other prefixes you may encounter in RefSeq: `NM_`/`NP_` (curated mRNA/protein), `NG_` (curated gene region), `NT_` (assembly scaffold, like `NW_`), `XM_`/`XP_` (automatically predicted, not curated at all).
 
@@ -270,7 +270,7 @@ Only `confident` rows of `Mito_calls.txt` are species calls. The limits below we
 - **A species or haplotype that is not in the database is never `confident`.** Absent species are still named, as closest relatives with `poor_fit` or `ambiguous`; the sample verdict says "an unsampled genus species or haplotype". Proposed: extend the database with the species or haplotype you expect (`--extend-db`), and run a Metazoa-only screen for references with long near-identical stretches to another genus (the all-against-all screen of the full database did not finish).
 - **Species complexes cannot be separated.** Species that share most of their reads are grouped as `ambiguous` and reported as "one of the group". The label shows the problem; it does not solve it. Proposed: report such groups at a higher level, or add a nuclear marker step.
 - **Thresholds were chosen on the test data.** `--min-decline` (0.9), `--min-breadth-ratio` (0.5) and `--max-overlap` (0.5) were set after looking at the benchmark, and only one real in-database species (*D. melanogaster*) was tested; its breadth ratio is 0.05-0.15 above the cutoff. A species whose reachable fraction of the mitogenome is below 0.5 is always labelled `poor_fit` (this errs on the safe side). The decline reacts to batches of poor reads (0.76 in one batch of the *D. simulans* sample). Proposed: calibrate on more real samples of known species, and on a second simulation seed.
-- **Breadth depends on depth.** `--cov-threshold` (default 25) is an absolute breadth, which grows with sequencing depth, so a rare species in a shallow sample can fall below it and is not reported. In the depth test the *D. melanogaster* hit was hidden by the threshold at 10% of the reads and had too few discriminatory reads at 5%. The new label rules use discriminatory reads and do not depend on this threshold. Proposed: lower `--cov-threshold` for low-depth samples, or replace it by the expected breadth given the depth.
+- **Breadth depends on depth.** `--cov-threshold` (default 25) is an absolute breadth, which grows with sequencing depth, so a rare species in a shallow sample can fall below it and is not reported. In the depth test the *D. melanogaster* hit was hidden by the threshold at 10% of the reads and had too few discriminatory reads at 5%. The label rules use discriminatory reads and do not depend on this threshold. Proposed: lower `--cov-threshold` for low-depth samples, or replace it by the expected breadth given the depth.
 - **Closest relative ranks first when reads fit equally.** Equal identities on several references say nothing about which is right. Proposed: EM reassignment over the credible references only. In tests it ranked the real *D. simulans* sample correctly (*D. simulans* 0.37 against *D. mauritiana* 0.33) but did not reduce wrong calls, and it has not been tested together with the labels.
 - **NUMTs are not detected directly.** ECMSD only shows that reads do not fit a reference the way reads fit their own species (`poor_fit`, window rule). This was not tested on a NUMT benchmark. Proposed: a benchmark with known NUMT-rich species.
 - **Amplicon and capture data.** ECMSD expects shotgun data. For amplicon or capture data the breadth and evenness thresholds do not apply.
@@ -295,7 +295,7 @@ Only `confident` rows of `Mito_calls.txt` are species calls. The limits below we
 
 - `-z, --create-db`: Create a new reference database
 - `-d, --db-folder`: Path to the folder where the database will be stored
-- `-b, --force-rebuild`: Optional — discard an existing database and rebuild it from scratch (implies `--create-db`). Extra references are kept
+- `-b, --force-rebuild`: Optional. Discard an existing database and rebuild it from scratch (implies `--create-db`). Extra references are kept
 
 #### Managing the Database
 
@@ -396,9 +396,9 @@ output_directory/
 - **Mito.paf.gz**: Compressed PAF with, for each read, the alignments to all references that tie for its best `AS` (the references the read is compatible with). Each line carries the extra tags `nc` (number of compatible references), `dm` (`AS` margin to the best lower-scoring reference, if one was reported) and `na` (number of alignments minimap2 reported for the read). Evidence, coverage, taxonomy and plots are based on this file
 - **Mito_reference_evidence.txt**: One row per reference with read counts (`compatible_reads`, `discriminatory_reads`, `weak_unique_reads`, `shared_reads`, `discriminatory_at_limit`), breadth, depth, evenness of the compatible and of the discriminatory reads, spatial statistics of the discriminatory reads (`breadth_ratio`: observed breadth / breadth expected for reads placed at random, 1 - exp(-depth); `discriminatory_windows`: fraction of 1 kb windows with a discriminatory read; `window_ratio`: that fraction / the fraction expected for as many random reads; `max_1kb_share`: share of discriminatory reads in the densest 1 kb window), the identity of the discriminatory reads (`discriminatory_identity`, `discriminatory_exact`, `edit_distance_decline`, see [Identity](#identity-right-species-or-closest-relative)), the fraction of compatible reads skipped as PCR duplicates (`duplicate_fraction`), whether the reference is `credible` and, if not, the `reason`
 - **Mito_all_alignments.paf.gz**, **Mito_alignments.tsv.gz** (only with `--keep-all-alignments`): all alignments, including secondary ones (`tp:A:S`). The table lists reference, coordinates, aligned length, MAPQ, `tp`, `AS`, `NM`, whether the alignment was chosen as best and its `AS` difference to the best alignment of the read, so ambiguous reads can be inspected
-- **Mito_coverage.txt**: Per-reference coverage statistics — columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
+- **Mito_coverage.txt**: Per-reference coverage statistics. Columns: `reference`, `ref_length`, `mean_coverage`, `std_coverage`, `pct_covered`
 - **Mito_summary.txt**: Tab-separated file with taxonomic assignments and read counts per read
-- **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `subspecies_name`, `read_count` (`subspecies_name` is `NA` for references not resolved below species level)
+- **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots. Columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `subspecies_name`, `read_count` (`subspecies_name` is `NA` for references not resolved below species level)
 - **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
 - **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa, with the call status in each facet title
 - **Mito_summary_\<taxon\>_proportions.txt**: Reads and proportion per taxon at the chosen level, with the call `status` from `Mito_calls.txt`; a taxon of a coarser level whose calls have different statuses is `mixed`
@@ -412,7 +412,7 @@ output_directory/
 
 After mapping, ECMSD calculates per-reference breadth of coverage from the PAF file. For each reference, it computes the percentage of reference positions covered by at least one read (`pct_covered`). Only references where `pct_covered ≥ --cov-threshold` are passed to the taxonomic assignment step.
 
-This replaces the previous RMUS-based filtering. Coverage breadth is a more direct and interpretable measure for distinguishing authentic mitochondrial hits (which should show broad, even coverage across the genome) from mapping artifacts or NUMTs (which tend to pile up on a small region of the reference).
+Coverage breadth is a more direct and interpretable measure for distinguishing authentic mitochondrial hits (which should show broad, even coverage across the genome) from mapping artifacts or NUMTs (which tend to pile up on a small region of the reference).
 
 The default is 25%. This threshold is on absolute breadth, and breadth grows with sequencing depth, so a species that is present at low abundance can fall below it in a shallow sample. On the 1.09 M read test sample (*D. melanogaster* plus a rare *G. bimaculatus*), 25% reports exactly these two species. Randomly subsampled to 10% of the reads, *G. bimaculatus* is still credible by its discriminatory reads (27 reads, 19% breadth) but is dropped by the 25% threshold; at 3% and 1% it has too few discriminatory reads to be reported at any threshold. In that range the discriminatory-evidence criteria (`--min-disc-*`) already reject the weak candidates that 25% is needed for at full depth, so for shallow samples a lower `--cov-threshold` (for example 5-10) is reasonable. `Mito_reference_evidence.txt` shows both values for every reference, so a borderline result can be checked.
 
@@ -513,7 +513,7 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 2. **"No database folder provided"** or **database files missing**
 
    - Analysis never builds the database; it exits with "Database not found. Run `ECMSD --create-db` first". Build it first: `ECMSD --create-db --db-folder /path/to/db`
-   - Ensure sufficient disk space (~5–10 GB) and internet connectivity
+   - Ensure sufficient disk space (about 5 to 10 GB) and internet connectivity
    - If a previous database build was interrupted, re-run `--create-db` to complete it
 3. **"Output directory already exists"**
 
@@ -522,7 +522,7 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 4. **Memory or disk space issues**
 
    - Reduce the number of threads with `-t`
-   - Ensure sufficient disk space for the database build (~5–10 GB peak; the finished database is well under 1 GB)
+   - Ensure sufficient disk space for the database build (about 5 to 10 GB peak; the finished database is well under 1 GB)
 5. **Parallel jobs failing or conflicting**
 
    - Ensure the database is fully built before launching parallel jobs
