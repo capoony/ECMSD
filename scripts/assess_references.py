@@ -34,7 +34,10 @@ a position at high depth, so duplicate_fraction is an upper bound there.
 
 Step A, credible references: a reference is credible when its discriminatory reads
 reach --min-disc-reads, cover at least --min-disc-breadth percent of the reference and
-are spread evenly enough over it (--min-disc-evenness). No threshold relates to the
+are spread evenly enough over it (--min-disc-evenness), and reach at least --min-window-ratio
+times the number of 1 kb windows that as many reads placed at random would hit. Under random
+placement this ratio stays above 0.6 for 20 or more reads, so 0.5 only removes references whose
+evidence piles up in a few regions, e.g. a conserved or contaminated stretch of the reference. No threshold relates to the
 abundance of other references, so a rare species is not removed for being rare.
 
 Step B, which uses all compatible alignments to calculate the coverage of the credible
@@ -60,10 +63,12 @@ import math
 import sys
 
 NBINS = 20
+SUBWIN = 100   # bp; the densest-window share slides in steps of SUBWIN
+WINDOW = 1000  # bp; window of discriminatory_windows and max_1kb_share
 HEADER = ["reference", "taxon_name", "ref_length", "compatible_reads", "discriminatory_reads",
           "weak_unique_reads", "shared_reads", "discriminatory_at_limit", "compatible_breadth", "discriminatory_breadth",
           "compatible_depth", "discriminatory_depth", "compatible_evenness",
-          "discriminatory_evenness", "discriminatory_identity", "discriminatory_exact", "edit_distance_decline", "duplicate_fraction", "credible", "reason"]
+          "discriminatory_evenness", "breadth_ratio", "discriminatory_windows", "window_ratio", "max_1kb_share", "discriminatory_identity", "discriminatory_exact", "edit_distance_decline", "duplicate_fraction", "credible", "reason"]
 
 
 def opener(path, encoding=None):
@@ -142,7 +147,7 @@ def good_quality(a, min_aln_len, min_aln_frac, min_identity):
 
 
 class RefEvidence:
-    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins", "dnm", "dalen", "dn", "dexact", "dhist", "dups")
+    __slots__ = ("length", "compat", "disc", "weak", "limit", "cdiff", "ddiff", "cbins", "dbins", "dnm", "dalen", "dn", "dexact", "dhist", "dups", "dsub")
 
     def __init__(self, length):
         self.length = length
@@ -152,6 +157,7 @@ class RefEvidence:
         self.dnm = self.dalen = self.dn = self.dexact = 0   # summed NM, alignment length, reads, reads with NM 0
         self.dhist = [0] * 4                                 # reads with NM 0, 1, 2, 3
         self.dups = 0                                        # compatible reads skipped as PCR duplicates
+        self.dsub = {}                                       # SUBWIN bp bin of the read midpoint -> discriminatory reads
 
     def add_identity(self, a):
         """Count a discriminatory read in the identity (reads without NM are skipped)."""
@@ -172,6 +178,9 @@ class RefEvidence:
             diff[start] = diff.get(start, 0) + 1
             diff[end] = diff.get(end, 0) - 1
             bins[mid] += 1
+        if discriminatory:
+            b = (start + end) // 2 // SUBWIN
+            self.dsub[b] = self.dsub.get(b, 0) + 1
 
 
 def collect(fh, min_margin=10, min_aln_len=20, min_aln_frac=0.5, min_identity=0.9, max_alns=20, dedup=True,
@@ -263,6 +272,29 @@ def evenness(bins):
     return max(0.0, -sum(c / n * math.log(c / n) for c in bins if c) / math.log(len(bins)))
 
 
+def breadth_ratio(covered_frac, depth):
+    """Observed breadth / breadth expected for reads placed at random, 1 - exp(-depth) (Lander-Waterman)."""
+    return covered_frac / (1.0 - math.exp(-depth)) if depth > 0 else None
+
+
+def spatial(sub, length, n):
+    """(fraction of WINDOW-bp windows with a discriminatory read, share of reads in the densest
+    circular WINDOW-bp window) from read midpoints binned per SUBWIN bp."""
+    if n == 0 or length <= 0:
+        return None, None
+    nsub = -(-length // SUBWIN)
+    k = min(WINDOW // SUBWIN, nsub)
+    counts = [sub.get(i, 0) for i in range(nsub)]
+    run = sum(counts[:k])
+    best = run
+    for i in range(1, nsub):  # circular genome: the window wraps around the end
+        run += counts[(i + k - 1) % nsub] - counts[i - 1]
+        best = max(best, run)
+    nwin = -(-length // WINDOW)
+    hit = len({i * SUBWIN // WINDOW for i, c in enumerate(counts) if c})
+    return hit / nwin, best / n
+
+
 def edit_distance_decline(hist):
     """HOPS -delta%: summed decreases / summed changes between neighbouring counts; None without change."""
     d = [b - a for a, b in zip(hist, hist[1:])]
@@ -270,7 +302,15 @@ def edit_distance_decline(hist):
     return sum(-x for x in d if x < 0) / total if total else None
 
 
-def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
+def window_ratio(hit_frac, length, n):
+    """Fraction of WINDOW-bp windows hit / fraction expected for n reads placed at random, 1 - (1 - 1/W)^n."""
+    if hit_frac is None:
+        return None
+    w = -(-length // WINDOW)
+    return hit_frac / (1.0 - (1.0 - 1.0 / w) ** n)
+
+
+def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio=0.0):
     """Step A. Return (row metrics, credible, reasons)."""
     L = ev.length
     cc, ct = sweep(ev.cdiff)
@@ -282,6 +322,9 @@ def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
              disc_exact=ev.dexact / ev.dn if ev.dn else None,
              decline=edit_distance_decline(ev.dhist),
              dup_frac=ev.dups / (ev.compat + ev.dups) if ev.compat + ev.dups else None)
+    m["breadth_ratio"] = breadth_ratio(dc / L, dt / L) if L else None
+    m["disc_windows"], m["max_1kb"] = spatial(ev.dsub, L, ev.disc)
+    m["window_ratio"] = window_ratio(m["disc_windows"], L, ev.disc)
     reasons = []
     if ev.disc < min_disc_reads:
         reasons.append("few_discriminatory_reads")
@@ -289,6 +332,8 @@ def judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness):
         reasons.append("low_discriminatory_breadth")
     if m["disc_even"] < min_disc_evenness:
         reasons.append("uneven_discriminatory_coverage")
+    if (m["window_ratio"] or 0.0) < min_window_ratio:
+        reasons.append("clustered_discriminatory_reads")
     return m, not reasons, reasons
 
 
@@ -296,11 +341,11 @@ def fmt(x, digits):
     return "NA" if x is None else "%.*f" % (digits, x)
 
 
-def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_evenness):
+def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio=0.0):
     n_credible = 0
     rows = []
     for ref, ev in refs.items():
-        m, ok, reasons = judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness)
+        m, ok, reasons = judge(ev, min_disc_reads, min_disc_breadth, min_disc_evenness, min_window_ratio)
         n_credible += ok
         rows.append((ev.disc, ev.compat, ref, ev, m, ok, reasons))
     rows.sort(key=lambda r: (-r[0], -r[1], r[2]))
@@ -312,6 +357,7 @@ def write_table(refs, out, names, min_disc_reads, min_disc_breadth, min_disc_eve
             "%.2f" % m["compat_breadth"], "%.2f" % m["disc_breadth"],
             "%.2f" % m["compat_depth"], "%.2f" % m["disc_depth"],
             "%.3f" % m["compat_even"], "%.3f" % m["disc_even"],
+            fmt(m["breadth_ratio"], 3), fmt(m["disc_windows"], 3), fmt(m["window_ratio"], 3), fmt(m["max_1kb"], 3),
             fmt(m["disc_ident"], 4), fmt(m["disc_exact"], 3),
             fmt(m["decline"], 3), fmt(m["dup_frac"], 3),
             "yes" if ok else "no", "pass" if ok else ";".join(reasons)]) + "\n")
@@ -343,6 +389,8 @@ def main(argv=None):
                    help="credible: minimum evenness (0-1) of the discriminatory reads over the reference (default: 0.5)")
     p.add_argument("--group-by-taxid", action="store_true",
                    help="count all references of one taxid (names <taxid>|<accession>) as one unit")
+    p.add_argument("--min-window-ratio", type=float, default=0.5,
+                   help="credible: minimum ratio of the fraction of 1 kb windows hit by discriminatory reads to the fraction expected for as many reads placed at random; 0 disables (default: 0.5)")
     args = p.parse_args(argv)
 
     with opener(args.PAF) as fh:
@@ -351,7 +399,7 @@ def main(argv=None):
     names = load_names(args.Names) if args.Names else {}
     with open(args.output, "w") as out:
         n_credible = write_table(refs, out, names, args.min_disc_reads, args.min_disc_breadth,
-                                 args.min_disc_evenness)
+                                 args.min_disc_evenness, args.min_window_ratio)
     print(f"Reference evidence: {stats['reads']} reads ({stats['duplicates']} PCR duplicates skipped), {stats['shared']} shared between references, "
           f"{stats['discriminatory']} discriminatory, {stats['weak']} with a unique but weak best alignment; "
           f"{n_credible} of {len(refs)} references credible. Written to: {args.output}")

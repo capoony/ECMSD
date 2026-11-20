@@ -6,6 +6,7 @@
 
 ### Added
 
+- **`scripts/assess_references.py`**, **`ECMSD.sh`**: spatial statistics of the discriminatory reads in `Mito_reference_evidence.txt` (`breadth_ratio`, `discriminatory_windows`, `window_ratio`, `max_1kb_share`) and a new credibility requirement `--min-disc-window-ratio` (default 0.5): a reference whose discriminatory reads hit less than half the 1 kb windows that as many random reads would hit is not credible
 - **`shell/install.sh`**: new `-p/--prefix PATH` option creates a new local conda environment at `PATH` and installs the dependencies and the `ECMSD` command there, without an active conda environment. An existing environment at `PATH` is reused; a non-empty directory that is not a conda environment is refused. New `-h/--help`
 - **`shell/install.sh`**: unknown options exit with an error
 - **`ECMSD.sh`**: two-stage mapping. Stage 1 maps all reads with `-x sr -k 17 -w 7 -n 1 -m 20 -s 20 --secondary=no`, no MAPQ filter and no `-c`, and collects the names of all reads with an alignment. Stage 2 remaps only those reads, extracted from the original FASTQ file(s), against the full database with `-c --secondary=yes -N 20`
