@@ -41,6 +41,9 @@ ALL ARGUMENTS:
      | --min-disc-breadth PCT                ... and these reads cover at least PCT % of the reference (default: 5)
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
      | --min-disc-window-ratio R             ... and hit at least R times the 1 kb windows that as many random reads would hit; 0 disables (default: 0.5)
+     | --min-decline D                       Label a reported reference poor_fit when the edit distance decline of its discriminatory reads is below D (default: 0.9)
+     | --min-breadth-ratio R                 ... or when their breadth is below R times the breadth expected from their depth; 0 disables (default: 0.5)
+     | --max-overlap J                       Label reported references that share more than J (Jaccard) of their compatible reads as one ambiguous group (default: 0.5)
      | --min-aln-len N                       Minimum alignment length in bp of a read that counts as discriminatory evidence; lower it for very short reads (default: 20)
      | --no-dedup                            Count PCR duplicates (same references, start, end and strand) as separate reads in the evidence table
      | --group-by-taxid MODE                 auto, yes or no: count all references of one taxid (FASTA headers <taxid>|<accession>, e.g. several haplotypes of a species) as one unit for evidence, credibility and assignment; auto = yes when the database has several references of a taxid (default: auto)
@@ -86,6 +89,9 @@ min_disc_reads=20
 min_disc_breadth=5
 min_disc_evenness=0.5
 min_disc_window_ratio=0.5
+min_decline=0.9
+min_breadth_ratio=0.5
+max_overlap=0.5
 min_aln_len=20
 dedup="yes"
 group_by_taxid="auto"
@@ -179,6 +185,21 @@ while [[ $# -gt 0 ]]; do
         min_disc_window_ratio="$2"
         shift 2
         ;;
+    --min-decline)
+        need_value "$@"
+        min_decline="$2"
+        shift 2
+        ;;
+    --min-breadth-ratio)
+        need_value "$@"
+        min_breadth_ratio="$2"
+        shift 2
+        ;;
+    --max-overlap)
+        need_value "$@"
+        max_overlap="$2"
+        shift 2
+        ;;
     --min-aln-len)
         need_value "$@"
         min_aln_len="$2"
@@ -257,7 +278,7 @@ done
 
 echo "Starting ECMSD pipeline..."
 
-for pair in "-u:${cov_threshold}" "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--min-disc-reads:${min_disc_reads}" "--min-disc-breadth:${min_disc_breadth}" "--min-disc-evenness:${min_disc_evenness}" "--min-disc-window-ratio:${min_disc_window_ratio}"; do
+for pair in "-u:${cov_threshold}" "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--min-disc-reads:${min_disc_reads}" "--min-disc-breadth:${min_disc_breadth}" "--min-disc-evenness:${min_disc_evenness}" "--min-disc-window-ratio:${min_disc_window_ratio}" "--min-decline:${min_decline}" "--min-breadth-ratio:${min_breadth_ratio}" "--max-overlap:${max_overlap}"; do
     [[ "${pair#*:}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "Error: ${pair%%:*} requires a number, got '${pair#*:}'." >&2; exit 1; }
 done
 for pair in "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--seed-k:${seed_k}" "--seed-w:${seed_w}" "--max-alns:${max_alns}" "--min-chain-score:${chain_score}" "--min-disc-reads:${min_disc_reads}" "--min-aln-len:${min_aln_len}"; do
@@ -533,6 +554,9 @@ python3 "${SCRIPT_DIR}/assess_references.py" \
     --min-disc-breadth "${min_disc_breadth}" \
     --min-disc-evenness "${min_disc_evenness}" \
     --min-window-ratio "${min_disc_window_ratio}" \
+    --min-decline "${min_decline}" \
+    --min-breadth-ratio "${min_breadth_ratio}" \
+    --max-overlap "${max_overlap}" \
     --min-aln-len "${min_aln_len}" \
     $([[ "${dedup}" == "no" ]] && echo --no-dedup) \
     $([[ "${group_by_taxid}" == "yes" ]] && echo --group-by-taxid)
