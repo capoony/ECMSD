@@ -12,10 +12,11 @@ suppressPackageStartupMessages({
 #   3  Path to the ref_summary file (Mito_summary.ref_summary.txt)
 #   4  Top-N references to plot (default: 100)
 #   5  Taxonomic rank requested with -x (default: species)
+#   6  Mito_calls.txt of call_species.py (optional): call status in the subtitle
 # ---------------------------------------------------------------------------
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) {
-  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n] [rank]")
+  stop("Usage: Rscript plot_paf_alignments.R <output_dir> <paf_file> <ref_summary_file> [top_n] [rank] [calls_file]")
 }
 
 out_dir <- args[1]
@@ -24,6 +25,24 @@ ref_summary <- args[3]
 top_n <- if (length(args) >= 4) as.integer(args[4]) else 25L
 # `ECMSD.sh` passes -x through verbatim; LinkTaxonomy.py lowercases it
 rank <- if (length(args) >= 5 && nchar(args[5]) > 0) tolower(args[5]) else "species"
+
+calls_file <- if (length(args) >= 6) args[6] else ""
+
+# Call status per reference unit: the unit is the taxid when references are grouped
+# by taxid, else the reference name, so both are looked up.
+unit_status <- character(0)
+if (nchar(calls_file) > 0 && file.exists(calls_file)) {
+  call_lines <- grep("^#", readLines(calls_file), value = TRUE, invert = TRUE)
+  calls <- read.delim(text = call_lines, sep = "\t", colClasses = "character", quote = "")
+  for (i in seq_len(nrow(calls))) {
+    for (u in strsplit(calls$taxids[i], ",", fixed = TRUE)[[1]]) unit_status[u] <- calls$status[i]
+  }
+}
+status_of <- function(ref_name, taxid) {
+  s <- unit_status[c(ref_name, as.character(taxid))]
+  s <- s[!is.na(s)]
+  if (length(s) == 0) NA_character_ else s[[1]]
+}
 
 plot_dir <- file.path(out_dir, "mapping", "alignment_plots")
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
@@ -126,6 +145,7 @@ for (i in seq_len(nrow(top_refs))) {
   taxid <- top_refs$taxid[i]
   taxon_name <- top_refs$taxon_name[i]
   read_count <- top_refs$read_count[i]
+  status <- status_of(ref_name, taxid)
 
   # `taxon_name` is the label LinkTaxonomy.py wrote for the rank the user asked
   # for with -x, already walked up to the next populated coarser rank, so it is
@@ -184,7 +204,8 @@ for (i in seq_len(nrow(top_refs))) {
         labs(
           title = sprintf("%s  [taxID: %s]", gsub("_", " ", display_name), taxid),
           subtitle = sprintf(
-            "Rank %d  |  %d mapped reads  |  %.1f%% coverage",
+            "%sRank %d  |  %d compatible reads  |  %.1f%% coverage",
+            if (is.na(status)) "" else paste0("Call: ", status, "  |  "),
             i, read_count, coverage_pct
           ),
           x = "Reference position (bp)", y = "Coverage"

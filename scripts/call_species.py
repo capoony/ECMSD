@@ -87,19 +87,44 @@ def make_calls(calls, weights, genus):
     return rows, verdict
 
 
+def db_line(path):
+    """One-line version of the database from its db_info.txt."""
+    info = dict(l.rstrip("\n").split("\t", 1) for l in open(path) if "\t" in l)
+    line = (f"RefSeq release {info.get('refseq_release', 'unknown')}, built {info.get('built', 'unknown')}, "
+            f"taxonomy {info.get('taxdump_downloaded', 'unknown')}")
+    if info.get("n_extra_references", "0") != "0":
+        line += f", {info['n_extra_references']} extra references (extended {info.get('extended', 'unknown')})"
+    return line
+
+
+def report(rows, verdict):
+    """Terminal summary: the sample verdict and one line per call."""
+    lines = [f"Sample: {verdict}"]
+    for r in rows:
+        lines.append(f"  {r[1]:<13} {r[2]:6.3f}  {r[0]}")
+    if any(r[1] != "confident" for r in rows):
+        lines.append("  Only confident rows are species calls; see the reason column of Mito_calls.txt.")
+    return "\n".join(lines)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--Evidence", required=True, help="evidence table of assess_references.py")
     p.add_argument("--Summary", required=True, help="<prefix>_Mito_summary.txt of LinkTaxonomy.py")
     p.add_argument("--output", required=True, help="calls table (TSV)")
+    p.add_argument("--DbInfo", help="db_info.txt of the database, summarised in the header")
     a = p.parse_args(argv)
     weights, genus = load_weights(a.Summary)
     rows, verdict = make_calls(load_calls(a.Evidence), weights, genus)
     with open(a.output, "w") as out:
-        out.write("# sample: " + verdict + "\n" + "\t".join(HEADER) + "\n")
+        out.write("# sample: " + verdict + "\n")
+        if a.DbInfo:
+            out.write("# db: " + db_line(a.DbInfo) + "\n")
+        out.write("\t".join(HEADER) + "\n")
         for r in rows:
             out.write("\t".join(r[:2] + ["%.4f" % r[2], "%.1f" % r[3]] + r[4:]) + "\n")
-    print(f"Calls: {len(rows)} ({verdict}). Written to: {a.output}")
+    print(report(rows, verdict))
+    print(f"Calls written to: {a.output}")
     return 0
 
 

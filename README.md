@@ -156,6 +156,29 @@ Including `NW_` scaffolds actively degrades results:
 
 The filter is applied in `shell/MakeRef.sh` (`extract_taxids()`), which restricts the accession-to-taxid mapping to `NC_`. Since `scripts/renameFASTA_taxid.py` only writes sequences whose accession appears in that mapping, `NW_` records never reach the FASTA.
 
+### Database version, updates and extensions
+
+Every build writes `db_info.txt` into the database folder: the ECMSD version, the build date, the RefSeq release, the date of the NCBI taxonomy, the number of references and of extra references, and the date of the last extension. Each analysis run prints it, and the second header line of `Mito_calls.txt` summarises it (`# db: RefSeq release 238, built ...`), so every result can be traced to its database. The full NCBI taxonomy (`nodes.dmp`, `names.dmp`, `merged.dmp`, gzipped, about 70 MB) is kept in `NCBI_taxdump/full/`; the analysis reads only the trimmed copies.
+
+**Updating.** `ECMSD --update-db --db-folder DB` compares the RefSeq release of the database with the current one and does nothing when they are the same. Otherwise it builds the new release in `DB/update.new/` while the old database stays usable, then moves the finished files into place and removes the staging folder. Extra references are kept: their taxids are checked against the new taxonomy (merged taxids are replaced). The new taxonomy also covers the old references, so a job that is running during the swap still finds its lineages. Still, results of one study should come from one database version: do not update while a workflow is running. Updating needs the disk space of a full build next to the existing database.
+
+**Extending.** The RefSeq database has one mitogenome per species. When a sample carries a haplotype that is not in it (for example *D. simulans* siIII, while RefSeq has siI), its reads fit the species' reference poorly, and the call is labelled `poor_fit` instead of `confident`. Known haplotypes or species can be added:
+
+```bash
+# NCBI accessions, one per line; sequences and taxids are fetched from NCBI
+ECMSD --extend-db --accessions accessions.txt --db-folder DB
+# or your own sequences, with headers >taxid|id (e.g. >7240|AF200848.1)
+ECMSD --extend-db --fasta my_mitogenomes.fa --db-folder DB
+```
+
+- The new sequences go into `extra_refs.fna.gz`; RefSeq is not changed. `extensions.log` lists every added sequence with date, source, taxid, length and warnings. Delete `extra_refs.fna.gz` to undo all extensions (the extra taxonomy lines are harmless).
+- Each record is checked against the stored taxonomy: unknown taxids are rejected, merged taxids are replaced, ids already in the database are skipped, and sequences under 5 kb and RefSeq `NC_` accessions are added with a warning. Low-complexity regions are masked as in the main database.
+- With several references of one taxid, the analysis turns on `--group-by-taxid` and sets `--max-alns` to 20 plus the largest number of references of one taxid, unless you set it.
+- Only add what you have a reason to expect. A mitochondrial haplotype that introgressed from another species gives the species of the mitochondrion, not of the nuclear genome: a simulated *D. mauritiana* sample with the maI haplotype, which is almost identical to *D. simulans* siIII, is called *D. simulans* with confidence once siIII is in the database.
+- Every file is replaced, never edited in place, so a running analysis sees either the old or the new set. To keep the original database unchanged, extend a hard-linked copy: `cp -al DB DB_ext`.
+
+One database job (build, update or extension) runs at a time per folder; a second one waits for the first.
+
 ## Test Data
 
 ECMSD includes a test dataset to verify the installation and demonstrate pipeline functionality. The test data consists of historic DNA (hDNA) sequencing reads from an unknown origin.
@@ -226,7 +249,7 @@ ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
 
 ### Known limitations
 
-- The database keeps one genome per taxid (the first sequence encountered wins), so multi-record mitogenomes lose their other records.
+- The database keeps one genome per taxid (the first sequence encountered wins), so multi-record mitogenomes lose their other records. Further mitogenomes of a taxid can be added with `--extend-db`.
 
 ### Command Line Options
 
@@ -241,7 +264,13 @@ ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
 
 - `-z, --create-db`: Create a new reference database
 - `-d, --db-folder`: Path to the folder where the database will be stored
-- `-b, --force-rebuild`: Optional — discard an existing database and rebuild it from scratch (implies `--create-db`)
+- `-b, --force-rebuild`: Optional — discard an existing database and rebuild it from scratch (implies `--create-db`). Extra references are kept
+
+#### Managing the Database
+
+- `--update-db`: update the database to the current NCBI RefSeq release, if it is newer (see [Database version, updates and extensions](#database-version-updates-and-extensions))
+- `--extend-db --accessions FILE`: add mitogenomes by NCBI nucleotide accession, one per line
+- `--extend-db --fasta FASTA`: add mitogenomes from a FASTA file with headers `>taxid|id`
 
 #### Optional Arguments
 
@@ -306,6 +335,7 @@ The pipeline generates the following output structure:
 ```text
 output_directory/
 ├── mapping/
+│   ├── Mito_calls.txt                           # Main result: one row per call with its status
 │   ├── Mito.paf.gz                              # Best alignments per read
 │   ├── Mito_all_alignments.paf.gz               # Only with --keep-all-alignments
 │   ├── Mito_alignments.tsv.gz                   # Only with --keep-all-alignments
@@ -315,7 +345,8 @@ output_directory/
 │   ├── Mito_summary.ref_summary.txt             # Ranked reference summary for plotting
 │   ├── Mito_summary_<taxon>.txt                 # Per-taxon read count summary
 │   ├── Mito_summary_<taxon>_ReadLengths.png     # Read length distribution plot
-│   ├── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot
+│   ├── Mito_summary_<taxon>_proportions.txt     # Proportions per taxon with call status
+│   ├── Mito_summary_<taxon>_Proportions.png     # Proportions bar plot, coloured by call status
 │   └── alignment_plots/                         # Per-reference coverage and depth plots
 └── logs/
     └── minimap2.log                             # Mapping log
@@ -323,6 +354,13 @@ output_directory/
 
 ### Output File Descriptions
 
+- **Mito_calls.txt**: the main result. The first line gives the verdict for the sample (`# sample: all calls confident`, `some calls are not confident, see status`, or that the reads fit no reference well and come from an unsampled species or haplotype of one genus); the second line gives the database version. Then one row per call: `call`, `status`, `proportion`, `weighted_reads`, `taxids`, `members` and `reason`. **Only `confident` rows are species calls.** The status is:
+  - `confident`: the reads fit this reference as well as reads fit their own species, and they separate it from the other reported references;
+  - `ambiguous`: references that share most of their reads (one row per group, e.g. `Drosophila group: D. mauritiana / D. simulans`); the reads cannot tell which of them is present;
+  - `poor_fit`: the reads fit the reference worse than reads fit their own species, or only in one region: a relative of the source, not the source (the species or its haplotype is probably missing from the database, see `--extend-db`);
+  - `low_evidence`: reported only through reads at the minimap2 `-N` limit.
+
+  The same summary is printed at the end of the run.
 - **Mito.paf.gz**: Compressed PAF with, for each read, the alignments to all references that tie for its best `AS` (the references the read is compatible with). Each line carries the extra tags `nc` (number of compatible references), `dm` (`AS` margin to the best lower-scoring reference, if one was reported) and `na` (number of alignments minimap2 reported for the read). Evidence, coverage, taxonomy and plots are based on this file
 - **Mito_reference_evidence.txt**: One row per reference with read counts (`compatible_reads`, `discriminatory_reads`, `weak_unique_reads`, `shared_reads`, `discriminatory_at_limit`), breadth, depth, evenness of the compatible and of the discriminatory reads, spatial statistics of the discriminatory reads (`breadth_ratio`: observed breadth / breadth expected for reads placed at random, 1 - exp(-depth); `discriminatory_windows`: fraction of 1 kb windows with a discriminatory read; `window_ratio`: that fraction / the fraction expected for as many random reads; `max_1kb_share`: share of discriminatory reads in the densest 1 kb window), the identity of the discriminatory reads (`discriminatory_identity`, `discriminatory_exact`, `edit_distance_decline`, see [Identity](#identity-right-species-or-closest-relative)), the fraction of compatible reads skipped as PCR duplicates (`duplicate_fraction`), whether the reference is `credible` and, if not, the `reason`
 - **Mito_all_alignments.paf.gz**, **Mito_alignments.tsv.gz** (only with `--keep-all-alignments`): all alignments, including secondary ones (`tp:A:S`). The table lists reference, coordinates, aligned length, MAPQ, `tp`, `AS`, `NM`, whether the alignment was chosen as best and its `AS` difference to the best alignment of the read, so ambiguous reads can be inspected
@@ -330,9 +368,10 @@ output_directory/
 - **Mito_summary.txt**: Tab-separated file with taxonomic assignments and read counts per read
 - **Mito_summary.ref_summary.txt**: Ranked reference summary used for generating alignment plots — columns: `ref_name`, `taxid`, `taxon_name`, `species_name`, `subspecies_name`, `read_count` (`subspecies_name` is `NA` for references not resolved below species level)
 - **Mito_summary_\<taxon\>.txt**: Aggregated read counts per taxon at the chosen taxonomic level
-- **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa
-- **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon
-- **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references. Titles and file names use the label for the rank requested with `-x`, so a run at species level never shows a subspecies name
+- **Mito_summary_\<taxon\>_ReadLengths.png**: Faceted histogram of read length distributions for the top 10 taxa, with the call status in each facet title
+- **Mito_summary_\<taxon\>_proportions.txt**: Reads and proportion per taxon at the chosen level, with the call `status` from `Mito_calls.txt`; a taxon of a coarser level whose calls have different statuses is `mixed`
+- **Mito_summary_\<taxon\>_Proportions.png**: Bar plot of relative read proportions per taxon, coloured by call status, with the sample verdict as subtitle
+- **alignment_plots/**: Two-panel PNG per reference showing alignment coverage breadth (top) and sequencing depth (bottom) for the top-N references; the subtitle starts with the call status. Titles and file names use the label for the rank requested with `-x`, so a run at species level never shows a subspecies name
 - **minimap2.log**: Detailed minimap2 log
 
 ## Parameters Explanation

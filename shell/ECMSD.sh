@@ -24,6 +24,10 @@ REQUIRED ARGUMENTS FOR BUILDING DATABASE:
   -d | --db-folder DB_FOLDER                Folder for the database
   -b | --force-rebuild                      Optional: discard an existing database and rebuild it from scratch
 
+MANAGING THE DATABASE:
+     | --update-db                          Rebuild against the current NCBI release if it is newer; extra references are kept
+     | --extend-db --fasta FASTA            Add mitogenomes with headers >taxid|id
+     | --extend-db --accessions FILE        Add mitogenomes by NCBI accession (one per line), fetched with their taxids
 ALL ARGUMENTS:
   -h | --help                               Show this help message and exit
   -v | --version                            Show version and exit
@@ -36,7 +40,7 @@ ALL ARGUMENTS:
      | --seed-k K                           minimap2 k-mer size (default: 17)
      | --seed-w W                           minimap2 minimizer window size (default: 7)
      | --min-chain-score M                   minimap2 minimal chaining score -m; higher values align fewer weak reads and map faster (default: 20)
-     | --max-alns N                          Maximum number of secondary alignments per read, minimap2 -N (default: 20)
+     | --max-alns N                          Maximum number of secondary alignments per read, minimap2 -N (default: 20, or 20 + the largest number of references of one taxid in an extended database)
      | --min-disc-reads N                    A reference is only reported when at least N reads discriminate it from all other references (default: 20)
      | --min-disc-breadth PCT                ... and these reads cover at least PCT % of the reference (default: 5)
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
@@ -56,6 +60,8 @@ ALL ARGUMENTS:
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
   -b | --force-rebuild                      Discard an existing database and rebuild it from scratch (implies --create-db)
+     | --update-db                          Update the database to the current NCBI release (built in DB_FOLDER/update.new, then swapped in)
+     | --extend-db                          Add references from --fasta FASTA (headers >taxid|id) or --accessions FILE
 
 All reads are mapped once with base-level alignment (-c) and secondary alignments, and all
 best-scoring alignments of each read are kept by alignment score (AS), not by MAPQ. A
@@ -67,6 +73,8 @@ Example:
   ECMSD -f reads_R1.fastq -r reads_R2.fastq -o results/ -d /path/to/db
   ECMSD --create-db --db-folder /path/to/db_folder
   ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
+  ECMSD --update-db --db-folder /path/to/db_folder
+  ECMSD --extend-db --accessions accessions.txt --db-folder /path/to/db_folder
   ECMSD -f reads_R1.fastq -o results/ --db-folder /path/to/db_folder
 EOF
 }
@@ -83,6 +91,7 @@ quality=0
 seed_k=17
 seed_w=7
 max_alns=20
+max_alns_set="no"
 chain_score=20
 keep_all="no"
 min_disc_reads=20
@@ -105,6 +114,10 @@ prefix=""
 db_folder=""
 create_db=false
 force_rebuild="no"
+update_db=false
+extend_db=false
+ext_kind=""
+ext_input=""
 
 ###############################################################################
 #                             Argument Parsing                                #
@@ -158,6 +171,7 @@ while [[ $# -gt 0 ]]; do
     --max-alns)
         need_value "$@"
         max_alns="$2"
+        max_alns_set="yes"
         shift 2
         ;;
     --min-chain-score)
@@ -263,6 +277,20 @@ while [[ $# -gt 0 ]]; do
         force_rebuild="yes"
         shift
         ;;
+    --update-db)
+        update_db=true
+        shift
+        ;;
+    --extend-db)
+        extend_db=true
+        shift
+        ;;
+    --fasta | --accessions)
+        need_value "$@"
+        ext_kind="${1#--}"
+        ext_input="$2"
+        shift 2
+        ;;
     -d | --db-folder)
         need_value "$@"
         db_folder="$2"
@@ -345,9 +373,34 @@ if [[ "${create_db}" == true ]]; then
     echo "Creating database in folder: ${db_folder}"
     mkdir -p "${db_folder}"
 
-    bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" "${force_rebuild}"
+    mode="build"
+    [[ "${force_rebuild}" == "yes" ]] && mode="rebuild"
+    ECMSD_VERSION="${version}" bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" "${mode}"
 
     echo "Database ready in ${db_folder}."
+    exit 0
+fi
+
+# Updating and extending change an existing database and exit when finished
+if [[ "${update_db}" == true || "${extend_db}" == true ]]; then
+    if [[ "${update_db}" == true && "${extend_db}" == true ]]; then
+        echo "Error: run --update-db and --extend-db separately." >&2
+        exit 1
+    fi
+    if [[ -z "${db_folder}" || ! -d "${db_folder}" ]]; then
+        echo "Error: --db-folder must name an existing database folder." >&2
+        exit 1
+    fi
+    if [[ "${update_db}" == true ]]; then
+        ECMSD_VERSION="${version}" bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" update
+    else
+        if [[ -z "${ext_input}" || ! -f "${ext_input}" ]]; then
+            echo "Error: --extend-db needs an existing --fasta or --accessions file." >&2
+            exit 1
+        fi
+        ECMSD_VERSION="${version}" bash "${SHELL_DIR}/MakeRef.sh" "${db_folder}" "${SCRIPT_DIR}" "${threads}" extend \
+            "${ext_kind}" "$(realpath "${ext_input}")"
+    fi
     exit 0
 fi
 
@@ -367,6 +420,16 @@ if [[ -n "${db_folder}" ]]; then
     REF="${db_folder}/mitochondrion_refseq_taxid_masked.fna.gz"
     NODES="${db_folder}/NCBI_taxdump/nodes.dmp"
     NAMES="${db_folder}/NCBI_taxdump/names.dmp"
+    # Reference FASTA files: RefSeq, plus the references added with --extend-db
+    REFS=("${REF}")
+    [[ -f "${db_folder}/extra_refs.fna.gz" ]] && REFS+=("${db_folder}/extra_refs.fna.gz")
+    DB_INFO="${db_folder}/db_info.txt"
+    if [[ -f "${DB_INFO}" ]]; then
+        echo "Database version:"
+        sed 's/^/  /' "${DB_INFO}"
+    else
+        echo "Database version: unknown (built before ECMSD recorded it; see --update-db)"
+    fi
 else
     echo "No database folder provided. Please provide a database folder using --db-folder or create a new database using --create-db."
     usage
@@ -456,19 +519,39 @@ MM2_SHORT=(-n 1 -m "${chain_score}" -s 20)
 
 # Single mapping pass of the original read files against the full database.
 # Base-level alignment (-c) and secondary alignments; nothing is removed by MAPQ.
+# With extra references, both FASTA files are streamed to minimap2 as one target on
+# stdin (joined gzip files are one gzip stream); the reads are always files.
 run_mapping() {
     echo "Mapping reads: $*" >&2
-    minimap2 \
-        -x sr \
-        -k "${seed_k}" -w "${seed_w}" "${MM2_SHORT[@]}" \
-        --secondary=yes -N "${max_alns}" \
-        -c \
-        -t "${threads}" "${REF}" "$@" \
-        2> "${Output}/logs/minimap2.log"
+    local mm2=(minimap2 -x sr -k "${seed_k}" -w "${seed_w}" "${MM2_SHORT[@]}"
+        --secondary=yes -N "${max_alns}" -c -t "${threads}")
+    if (( ${#REFS[@]} > 1 )); then
+        cat "${REFS[@]}" | "${mm2[@]}" - "$@" 2> "${Output}/logs/minimap2.log"
+    else
+        "${mm2[@]}" "${REF}" "$@" 2> "${Output}/logs/minimap2.log"
+    fi
 
     echo "Minimap2 log:" >&2
     cat "${Output}/logs/minimap2.log" >&2
 }
+
+###############################################################################
+#                        References per Taxid                                 #
+###############################################################################
+# Several references of one taxid only exist in databases with <taxid>|<accession>
+# headers (e.g. haplotypes added with --extend-db). They turn on --group-by-taxid auto,
+# and --max-alns must leave room for all of them plus 20 competitors, or the
+# discriminatory reads of the taxid hit the minimap2 -N limit.
+max_per_taxid=$(gzip -dc "${REFS[@]}" | grep '^>' | cut -d'|' -f1 | sort | uniq -c | awk 'm < $1 { m = $1 } END { print m + 0 }')
+if [[ "${group_by_taxid}" == "auto" ]]; then
+    group_by_taxid="no"
+    (( max_per_taxid > 1 )) && group_by_taxid="yes"
+fi
+echo "Grouping references by taxid: ${group_by_taxid}"
+if [[ "${max_alns_set}" == "no" ]] && (( max_per_taxid > 1 )); then
+    max_alns=$(( 20 + max_per_taxid ))
+    echo "Up to ${max_per_taxid} references per taxid: --max-alns set to ${max_alns}"
+fi
 
 ###############################################################################
 #                        Mapping Step                                         #
@@ -530,16 +613,6 @@ fi
 # not when it merely shares reads with a reference that is present (Step A). The
 # coverage of the credible references is then calculated from all compatible
 # alignments, including reads that tie with other references (Step B).
-if [[ "${group_by_taxid}" == "auto" ]]; then
-    # several references of one taxid only exist in databases with <taxid>|<accession> headers
-    # wc reads to the end: an early-exiting reader would make pipefail report SIGPIPE
-    if [[ $(gzip -dc "${REF}" | grep '^>' | cut -d'|' -f1 | sort | uniq -d | wc -l) -gt 0 ]]; then
-        group_by_taxid="yes"
-    else
-        group_by_taxid="no"
-    fi
-fi
-echo "Grouping references by taxid: ${group_by_taxid}"
 EVIDENCE_OUT="${Output}/mapping/Mito_reference_evidence.txt"
 if [[ -n "${prefix}" ]]; then
     EVIDENCE_OUT="${Output}/mapping/${prefix}_Mito_reference_evidence.txt"
@@ -614,7 +687,8 @@ fi
 python3 "${SCRIPT_DIR}/call_species.py" \
     --Evidence "${EVIDENCE_OUT}" \
     --Summary "${output_base}.txt" \
-    --output "${output_base%_summary}_calls.txt"
+    --output "${output_base%_summary}_calls.txt" \
+    $([[ -f "${DB_INFO}" ]] && echo --DbInfo "${DB_INFO}")
 
 if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
     echo "Warning: No references passed the coverage threshold (--cov-threshold ${cov_threshold}). Plots will be empty."
@@ -632,7 +706,8 @@ Rscript "${SCRIPT_DIR}/plot_paf_alignments.R" \
     "${PAF}.gz" \
     "${output_base}.ref_summary.txt" \
     "${top_n}" \
-    "${taxonomic_hierarchy}"
+    "${taxonomic_hierarchy}" \
+    "${output_base%_summary}_calls.txt"
 
 ###############################################################################
 #                        Pipeline Completed                                   #
