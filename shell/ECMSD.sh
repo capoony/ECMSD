@@ -582,6 +582,12 @@ if [[ ! -f "${summary_file}" ]]; then
     exit 1
 fi
 
+# One row per call with a status (confident, ambiguous, poor_fit, low_evidence).
+python3 "${SCRIPT_DIR}/call_species.py" \
+    --Evidence "${EVIDENCE_OUT}" \
+    --Summary "${output_base}.txt" \
+    --output "${output_base%_summary}_calls.txt"
+
 if [[ $(wc -l <"${summary_file}") -le 1 ]]; then
     echo "Warning: No references passed the coverage threshold (--cov-threshold ${cov_threshold}). Plots will be empty."
 fi
