@@ -141,10 +141,11 @@ The database is built from the NCBI RefSeq mitochondrion release, but **only `NC
 
 RefSeq accession prefixes encode how a sequence was produced and how much curation it received:
 
-| Prefix | Meaning | Kept? |
-| --- | --- | --- |
-| `NC_` | Complete genomic molecule, curated RefSeq — a finished, reviewed mitogenome that someone deliberately sequenced, assembled and checked | ✅ |
-| `NW_` | Unplaced/unlocalised genomic scaffold, auto-generated from a whole-genome shotgun assembly — a leftover contig that automated screening flagged as mitochondrial, with no curation and no guarantee of completeness | ❌ |
+
+| Prefix | Meaning                                                                                                                                                                                                              | Kept? |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `NC_`  | Complete genomic molecule, curated RefSeq — a finished, reviewed mitogenome that someone deliberately sequenced, assembled and checked                                                                              | ✅    |
+| `NW_`  | Unplaced/unlocalised genomic scaffold, auto-generated from a whole-genome shotgun assembly — a leftover contig that automated screening flagged as mitochondrial, with no curation and no guarantee of completeness | ❌    |
 
 For reference, other prefixes you may encounter in RefSeq: `NM_`/`NP_` (curated mRNA/protein), `NG_` (curated gene region), `NT_` (assembly scaffold, like `NW_`), `XM_`/`XP_` (automatically predicted, not curated at all).
 
@@ -189,6 +190,7 @@ ECMSD includes a test dataset to verify the installation and demonstrate pipelin
 - **Content**: Merged FASTQ reads from hDNA sequencing
 - **Purpose**: Pipeline validation and demonstration
 - **Origin**: Unknown sample (for testing purposes only)
+- **Poor-fit sample**: `TestData/merged_poor_fit.fastq.gz` (~7 MB) holds the first 200,000 reads of `merged.fastq.gz` with 6% of the bases substituted (`TestData/make_poor_fit.py`, seeded). Its reads fit every reference poorly, so `TestData/test_poor_fit.sh` expects `poor_fit` calls and no `confident` call.
 
 ### Running the Test
 
@@ -249,7 +251,36 @@ ECMSD -m merged_reads.fastq -o output_directory/ -d /path/to/db
 
 ### Known limitations
 
-- The database keeps one genome per taxid (the first sequence encountered wins), so multi-record mitogenomes lose their other records. Further mitogenomes of a taxid can be added with `--extend-db`.
+Only `confident` rows of `Mito_calls.txt` are species calls. The limits below were found in tests on simulated and real reads with known species (25 scenarios, plus depth tests). Each is marked as addressed, partly addressed or open, with the proposed remedy where there is one.
+
+**Addressed**
+
+- **A species missing from the database is reported as its closest relatives.** The relatives used to be reported as credible hits. They now get the label `poor_fit` or `ambiguous`, and the sample verdict names the genus. In the tests no wrong species was labelled `confident`; the old version did this in 12 of 25 scenarios. The relatives are still listed, and they are not species calls. See [Identity](#identity-right-species-or-closest-relative).
+- **A haplotype missing from the database.** RefSeq holds one mitogenome per species, so the right species can fit worse than a sister species (the *D. simulans* sample called *D. mauritiana*). Without added references it is labelled `poor_fit`. `--extend-db` adds known haplotypes, which are counted as one unit per species; with 27 *D. simulans* complex haplotypes added, that sample is called *D. simulans* with confidence.
+- **Contaminated reference sequences.** A stretch of foreign sequence in a reference (*Exorista sorbillans*, taxid 191189, has a Drosophila segment of about 4.5 kb; *D. formosana*, 157056, a COI-COII stretch 99% identical to *D. melanogaster*) gave credible hits. `--min-disc-window-ratio` removes references whose discriminatory reads pile up in a few windows.
+- **Shared reads.** A read shared by several credible references is split in proportion to their discriminatory reads, not given to one winner.
+- **PCR duplicates** no longer inflate the discriminatory read counts and identity columns (`--no-dedup` switches this off).
+- **Multi-record mitogenomes.** The database keeps one genome per taxid (the first sequence encountered wins). Further mitogenomes of a taxid can be added with `--extend-db`.
+- **Competing alignments cut off by minimap2** (`--max-alns`). Raising the limit hardly changes the calls and costs 4-5 times the mapping time, so it is kept. Calls that depend on reads at the limit are labelled `low_evidence`. With extra references, `--max-alns` is raised automatically.
+- **Aligner damage.** C to T and G to A damage at read ends did not change the calls in tests with simulated reads at 47 and 70 bp. Wrong aDNA calls came from short reads and missing haplotypes. A damage-aware score was tried and rejected (it creates reads that look unique by mistake).
+
+**Open, with a proposed solution**
+
+- **Mitochondrial introgression.** A mitochondrion that moved between species gives the species of the mitochondrion, not of the nuclear genome. *D. mauritiana* maI is almost identical to *D. simulans* siIII, so maI reads are called *D. simulans* with confidence once siIII is in the database. No read-level rule can detect this. Use nuclear markers to decide, and add haplotypes only when you expect them.
+- **A species or haplotype that is not in the database is never `confident`.** Absent species are still named, as closest relatives with `poor_fit` or `ambiguous`; the sample verdict says "an unsampled genus species or haplotype". Proposed: extend the database with the species or haplotype you expect (`--extend-db`), and run a Metazoa-only screen for references with long near-identical stretches to another genus (the all-against-all screen of the full database did not finish).
+- **Species complexes cannot be separated.** Species that share most of their reads are grouped as `ambiguous` and reported as "one of the group". The label shows the problem; it does not solve it. Proposed: report such groups at a higher level, or add a nuclear marker step.
+- **Thresholds were chosen on the test data.** `--min-decline` (0.9), `--min-breadth-ratio` (0.5) and `--max-overlap` (0.5) were set after looking at the benchmark, and only one real in-database species (*D. melanogaster*) was tested; its breadth ratio is 0.05-0.15 above the cutoff. A species whose reachable fraction of the mitogenome is below 0.5 is always labelled `poor_fit` (this errs on the safe side). The decline reacts to batches of poor reads (0.76 in one batch of the *D. simulans* sample). Proposed: calibrate on more real samples of known species, and on a second simulation seed.
+- **Breadth depends on depth.** `--cov-threshold` (default 25) is an absolute breadth, which grows with sequencing depth, so a rare species in a shallow sample can fall below it and is not reported. In the depth test the *D. melanogaster* hit was hidden by the threshold at 10% of the reads and had too few discriminatory reads at 5%. The new label rules use discriminatory reads and do not depend on this threshold. Proposed: lower `--cov-threshold` for low-depth samples, or replace it by the expected breadth given the depth.
+- **Closest relative ranks first when reads fit equally.** Equal identities on several references say nothing about which is right. Proposed: EM reassignment over the credible references only. In tests it ranked the real *D. simulans* sample correctly (*D. simulans* 0.37 against *D. mauritiana* 0.33) but did not reduce wrong calls, and it has not been tested together with the labels.
+- **NUMTs are not detected directly.** ECMSD only shows that reads do not fit a reference the way reads fit their own species (`poor_fit`, window rule). This was not tested on a NUMT benchmark. Proposed: a benchmark with known NUMT-rich species.
+- **Amplicon and capture data.** ECMSD expects shotgun data. For amplicon or capture data the breadth and evenness thresholds do not apply.
+- **Low-quality references.** The database cannot be fully checked: a RefSeq mitogenome may itself be chimeric or contaminated. Proposed: flag or remove the two known entries above and screen the rest.
+- **Reads shorter than about 30 bp** are rarely mapped, and at 30 bp a single mismatch is 3.3%, so identity columns are noisy. At 47 bp the decline is 1.000 for right and wrong references alike.
+
+**Not tested**
+
+- Samples with very few mitochondrial reads (about 10-50).
+- Large mitogenomes of plants and fungi.
 
 ### Command Line Options
 
@@ -355,6 +386,7 @@ output_directory/
 ### Output File Descriptions
 
 - **Mito_calls.txt**: the main result. The first line gives the verdict for the sample (`# sample: all calls confident`, `some calls are not confident, see status`, or that the reads fit no reference well and come from an unsampled species or haplotype of one genus); the second line gives the database version. Then one row per call: `call`, `status`, `proportion`, `weighted_reads`, `taxids`, `members` and `reason`. **Only `confident` rows are species calls.** The status is:
+
   - `confident`: the reads fit this reference as well as reads fit their own species, and they separate it from the other reported references;
   - `ambiguous`: references that share most of their reads (one row per group, e.g. `Drosophila group: D. mauritiana / D. simulans`); the reads cannot tell which of them is present;
   - `poor_fit`: the reads fit the reference worse than reads fit their own species, or only in one region: a relative of the source, not the source (the species or its haplotype is probably missing from the database, see `--extend-db`);
@@ -430,13 +462,14 @@ What the columns can and cannot tell:
 
 Measured on 4M read pairs of *D. simulans* (76 bp) and *D. melanogaster* (75 bp), against the full database and against a database without the sample's own species. Credible references, `discriminatory_identity` / `discriminatory_exact` / `edit_distance_decline`:
 
-| Sample | Database | Credible references |
-| --- | --- | --- |
-| *D. melanogaster* | full | *D. melanogaster* 0.9956 / 0.764 / 1.000 |
-| *D. melanogaster* | without *D. melanogaster* | *D. formosana* 0.9941 / 0.686 / 1.000, *D. mauritiana* 0.9774 / 0.274 / 0.667, *D. simulans* 0.9747 / 0.205 / 0.357 |
-| *D. simulans* | full | *D. melanogaster* 0.9822 / 0.299 / 0.744, *D. mauritiana* 0.9813 / 0.288 / 0.738, *D. sechellia* 0.9802 / 0.261 / 0.813, *D. simulans* 0.9789 / 0.244 / 0.666 |
-| *D. simulans* | without *D. simulans* | *D. sechellia* 0.9805 / 0.260 / 0.758, *D. mauritiana* 0.9797 / 0.263 / 0.715, *D. melanogaster* 0.9786 / 0.208 / 0.631 |
-| 3 *D. melanogaster* : 1 *D. simulans* | full | *D. melanogaster* 0.9855 / 0.571 / 1.000, *D. mauritiana*, *D. sechellia*, *D. simulans* 0.969-0.971 / 0.19-0.21 / 0.58-0.69 |
+
+| Sample                               | Database                 | Credible references                                                                                                                                           |
+| ------------------------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| *D. melanogaster*                    | full                     | *D. melanogaster* 0.9956 / 0.764 / 1.000                                                                                                                      |
+| *D. melanogaster*                    | without*D. melanogaster* | *D. formosana* 0.9941 / 0.686 / 1.000, *D. mauritiana* 0.9774 / 0.274 / 0.667, *D. simulans* 0.9747 / 0.205 / 0.357                                           |
+| *D. simulans*                        | full                     | *D. melanogaster* 0.9822 / 0.299 / 0.744, *D. mauritiana* 0.9813 / 0.288 / 0.738, *D. sechellia* 0.9802 / 0.261 / 0.813, *D. simulans* 0.9789 / 0.244 / 0.666 |
+| *D. simulans*                        | without*D. simulans*     | *D. sechellia* 0.9805 / 0.260 / 0.758, *D. mauritiana* 0.9797 / 0.263 / 0.715, *D. melanogaster* 0.9786 / 0.208 / 0.631                                       |
+| 3*D. melanogaster* : 1 *D. simulans* | full                     | *D. melanogaster* 0.9855 / 0.571 / 1.000, *D. mauritiana*, *D. sechellia*, *D. simulans* 0.969-0.971 / 0.19-0.21 / 0.58-0.69                                  |
 
 *D. melanogaster* fits its own reference (decline 1.000); with it removed, its closest relatives fall to 0.36-0.67. *D. formosana* stays at 1.000 because its discriminatory reads come from one region (17% breadth) that is nearly identical to *D. melanogaster*. The *D. simulans* sample fits no reference (0.67-0.81, also with the full database), because its haplogroup is not in the database (see below); the same holds for the *D. simulans* part of the mix.
 
@@ -473,24 +506,25 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 ### Common Issues
 
 1. **"No conda environment is active"**
+
    - Activate a conda environment before running `install.sh`: `conda activate <your-env>`
    - If no environment exists yet, create one: `conda create -n ecmsd_env && conda activate ecmsd_env`
    - Or let the script create one at a path of your choice: `bash shell/install.sh --prefix /path/to/ecmsd_env`
-
 2. **"No database folder provided"** or **database files missing**
+
    - Analysis never builds the database; it exits with "Database not found. Run `ECMSD --create-db` first". Build it first: `ECMSD --create-db --db-folder /path/to/db`
    - Ensure sufficient disk space (~5–10 GB) and internet connectivity
    - If a previous database build was interrupted, re-run `--create-db` to complete it
-
 3. **"Output directory already exists"**
+
    - Use the `-c` or `--force` flag to overwrite existing results
    - Or specify a different output directory
-
 4. **Memory or disk space issues**
+
    - Reduce the number of threads with `-t`
    - Ensure sufficient disk space for the database build (~5–10 GB peak; the finished database is well under 1 GB)
-
 5. **Parallel jobs failing or conflicting**
+
    - Ensure the database is fully built before launching parallel jobs
    - Each job must write to its own `--out` directory
 
@@ -507,7 +541,6 @@ Determines the taxonomic level for classification (e.g., species, genus, family,
 If you use ECMSD in your research, please cite:
 
 > Saadain, S., Kapun, M., & Kofler, R. (2026). pastForward: a Snakemake pipeline for ancient and historical DNA with eukaryote-wide taxonomic screening and tracking of copy-number variation. *bioRxiv*. https://doi.org/10.64898/2026.08.07.743613
-
 
 ## License
 
