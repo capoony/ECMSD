@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import sys
 import tempfile
@@ -197,6 +198,40 @@ class JudgeTests(unittest.TestCase):
         _, ok, why = ar.judge(refs["A"], 20, 5, 0.0)
         self.assertFalse(ok)
         self.assertIn("low_discriminatory_breadth", why)
+
+
+class SpatialTests(unittest.TestCase):
+
+    def test_breadth_ratio_is_one_for_non_overlapping_reads(self):
+        # 10 reads tiling 500 of 10,000 bp: depth 0.05, expected breadth 1 - exp(-0.05)
+        m, _, _ = ar.judge(collect([aln(f"d{i}", "A", i * 50, dm=20, ref_len=10000) for i in range(10)])[0]["A"], 1, 0, 0)
+        self.assertAlmostEqual(m["breadth_ratio"], 0.05 / (1 - math.exp(-0.05)), places=6)
+
+    def test_stacked_reads_have_low_ratio_and_high_concentration(self):
+        spread = [aln(f"s{i}", "A", i * 500, dm=20, ref_len=10000) for i in range(20)]
+        stack = [aln(f"t{i}", "B", 2000 + i * 5, dm=20, ref_len=10000) for i in range(20)]
+        refs, _ = collect(spread + stack)
+        ms, _, _ = ar.judge(refs["A"], 1, 0, 0)
+        mt, ok, why = ar.judge(refs["B"], 1, 0, 0, min_window_ratio=0.5)
+        self.assertGreater(ms["breadth_ratio"], 0.95)
+        self.assertLess(mt["breadth_ratio"], 0.5)
+        self.assertEqual((ms["disc_windows"], ms["max_1kb"]), (1.0, 0.1))
+        self.assertEqual((mt["disc_windows"], mt["max_1kb"]), (0.1, 1.0))
+        self.assertFalse(ok)
+        self.assertIn("clustered_discriminatory_reads", why)
+        self.assertAlmostEqual(mt["window_ratio"], 0.1 / (1 - 0.9 ** 20))
+        self.assertTrue(ar.judge(refs["A"], 1, 0, 0, min_window_ratio=0.5)[1])
+
+    def test_densest_window_wraps_around_the_circular_end(self):
+        reads = [aln(f"e{i}", "A", 9700, 9750, dm=20, ref_len=10000) for i in range(3)]
+        reads += [aln(f"f{i}", "A", 100 + i, 150 + i, dm=20, ref_len=10000) for i in range(3)]
+        reads += [aln("g", "A", 5000, dm=20, ref_len=10000)]
+        m, _, _ = ar.judge(collect(reads, dedup=False)[0]["A"], 1, 0, 0)
+        self.assertAlmostEqual(m["max_1kb"], 6 / 7)
+
+    def test_no_discriminatory_reads_gives_na(self):
+        m, _, _ = ar.judge(collect([aln("s", "A", 0, nc=2), aln("s", "B", 0, nc=2)])[0]["A"], 1, 0, 0)
+        self.assertEqual((m["breadth_ratio"], m["disc_windows"], m["window_ratio"], m["max_1kb"]), (None,) * 4)
 
 
 class OutputTests(unittest.TestCase):

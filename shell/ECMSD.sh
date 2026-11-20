@@ -40,6 +40,7 @@ ALL ARGUMENTS:
      | --min-disc-reads N                    A reference is only reported when at least N reads discriminate it from all other references (default: 20)
      | --min-disc-breadth PCT                ... and these reads cover at least PCT % of the reference (default: 5)
      | --min-disc-evenness E                 ... and are spread over it with an evenness of at least E, 0-1 (default: 0.5)
+     | --min-disc-window-ratio R             ... and hit at least R times the 1 kb windows that as many random reads would hit; 0 disables (default: 0.5)
      | --min-aln-len N                       Minimum alignment length in bp of a read that counts as discriminatory evidence; lower it for very short reads (default: 20)
      | --no-dedup                            Count PCR duplicates (same references, start, end and strand) as separate reads in the evidence table
      | --keep-all-alignments                 Stage 2: also keep every alignment (all_alignments PAF and a table with tp, AS, NM, MAPQ); large and slower
@@ -84,6 +85,7 @@ keep_all="no"
 min_disc_reads=20
 min_disc_breadth=5
 min_disc_evenness=0.5
+min_disc_window_ratio=0.5
 min_aln_len=20
 dedup="yes"
 threads=10
@@ -171,6 +173,11 @@ while [[ $# -gt 0 ]]; do
         min_disc_evenness="$2"
         shift 2
         ;;
+    --min-disc-window-ratio)
+        need_value "$@"
+        min_disc_window_ratio="$2"
+        shift 2
+        ;;
     --min-aln-len)
         need_value "$@"
         min_aln_len="$2"
@@ -244,7 +251,7 @@ done
 
 echo "Starting ECMSD pipeline..."
 
-for pair in "-u:${cov_threshold}" "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--min-disc-reads:${min_disc_reads}" "--min-disc-breadth:${min_disc_breadth}" "--min-disc-evenness:${min_disc_evenness}"; do
+for pair in "-u:${cov_threshold}" "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--min-disc-reads:${min_disc_reads}" "--min-disc-breadth:${min_disc_breadth}" "--min-disc-evenness:${min_disc_evenness}" "--min-disc-window-ratio:${min_disc_window_ratio}"; do
     [[ "${pair#*:}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "Error: ${pair%%:*} requires a number, got '${pair#*:}'." >&2; exit 1; }
 done
 for pair in "-q:${quality}" "-n:${top_n}" "-t:${threads}" "--seed-k:${seed_k}" "--seed-w:${seed_w}" "--max-alns:${max_alns}" "--min-chain-score:${chain_score}" "--min-disc-reads:${min_disc_reads}" "--min-aln-len:${min_aln_len}"; do
@@ -531,6 +538,7 @@ python3 "${SCRIPT_DIR}/assess_references.py" \
     --min-disc-reads "${min_disc_reads}" \
     --min-disc-breadth "${min_disc_breadth}" \
     --min-disc-evenness "${min_disc_evenness}" \
+    --min-window-ratio "${min_disc_window_ratio}" \
     --min-aln-len "${min_aln_len}" \
     $([[ "${dedup}" == "no" ]] && echo --no-dedup)
 
