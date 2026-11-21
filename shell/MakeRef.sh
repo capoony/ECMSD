@@ -50,6 +50,7 @@ INTERMEDIATE_FILES=(
     mitochondrion_refseq_taxid.fna.gz
     mitochondrion_refseq_taxid_masked.fna
     refseq_release.txt
+    refseq_downloaded.txt
 )
 
 echo "*********************"
@@ -114,6 +115,8 @@ download_genomes() {
     cat ${parts} >mitochondrion_refseq.fa.gz.tmp
     mv mitochondrion_refseq.fa.gz.tmp mitochondrion_refseq.fa.gz
     rm -f ${parts}
+    # Download date of the mitogenomes, recorded in db_info.txt (the build date can be later)
+    date +%F >refseq_downloaded.txt
 
     if [ ! -f "mitochondrion_refseq.fa.gz" ]; then
         echo "Error: Mitochondrial genome download failed."
@@ -318,6 +321,7 @@ write_db_info() {
         printf 'ecmsd_version\t%s\n' "${ECMSD_VERSION:-unknown}"
         printf 'built\t%s\n' "${1:-unknown}"
         printf 'refseq_release\t%s\n' "$(cat refseq_release.txt 2>/dev/null || info_get refseq_release | grep . || echo unknown)"
+        printf 'refseq_downloaded\t%s\n' "$(cat refseq_downloaded.txt 2>/dev/null || info_get refseq_downloaded | grep . || echo unknown)"
         printf 'taxdump_downloaded\t%s\n' "$(cat "${FULL_DIR}/downloaded" 2>/dev/null || echo unknown)"
         printf 'n_references\t%s\n' "$(gzip -dc "${REF_FILE}" | grep -c '^>')"
         printf 'n_extra_references\t%s\n' "${n_extra}"

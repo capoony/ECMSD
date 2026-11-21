@@ -90,7 +90,8 @@ def make_calls(calls, weights, genus):
 def db_line(path):
     """One-line version of the database from its db_info.txt."""
     info = dict(l.rstrip("\n").split("\t", 1) for l in open(path) if "\t" in l)
-    line = (f"RefSeq release {info.get('refseq_release', 'unknown')}, built {info.get('built', 'unknown')}, "
+    line = (f"RefSeq release {info.get('refseq_release', 'unknown')}, "
+            f"downloaded {info.get('refseq_downloaded', 'unknown')}, built {info.get('built', 'unknown')}, "
             f"taxonomy {info.get('taxdump_downloaded', 'unknown')}")
     if info.get("n_extra_references", "0") != "0":
         line += f", {info['n_extra_references']} extra references (extended {info.get('extended', 'unknown')})"

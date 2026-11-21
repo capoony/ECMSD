@@ -95,9 +95,9 @@ class CallReportTests(unittest.TestCase):
     def test_db_line_mentions_extensions_only_when_present(self):
         with tempfile.TemporaryDirectory() as d:
             p = write(os.path.join(d, "db_info.txt"),
-                      "refseq_release\t238\nbuilt\t2026-11-20\ntaxdump_downloaded\t2026-11-20\n"
+                      "refseq_release\t238\nrefseq_downloaded\t2026-11-19\nbuilt\t2026-11-20\ntaxdump_downloaded\t2026-11-20\n"
                       "n_extra_references\t0\nextended\tnever\n")
-            self.assertEqual(cs.db_line(p), "RefSeq release 238, built 2026-11-20, taxonomy 2026-11-20")
+            self.assertEqual(cs.db_line(p), "RefSeq release 238, downloaded 2026-11-19, built 2026-11-20, taxonomy 2026-11-20")
             write(p, "refseq_release\t238\nn_extra_references\t27\nextended\t2026-11-21\n")
             self.assertIn("27 extra references (extended 2026-11-21)", cs.db_line(p))
 
