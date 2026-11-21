@@ -16,10 +16,6 @@ yes) mode=rebuild ;;
 no) mode=build ;;
 esac
 
-# activate the conda environment
-eval "$(conda shell.bash hook)"
-conda activate /media/inter/pipelines/ECMSD_old/scripts/conda_env
-
 # The only three files the analysis pipeline needs from the database folder
 # (see ECMSD.sh: REF, NODES, NAMES; extra_refs.fna.gz and db_info.txt are optional). Everything else produced below is a build
 # intermediate and is removed by cleanup_intermediates() once the build succeeds.

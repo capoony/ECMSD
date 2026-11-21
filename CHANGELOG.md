@@ -37,6 +37,10 @@
 - **`ECMSD.sh`**: the mapping output is piped straight into `select_best_alignments.py` and no longer written to disk unless `--keep-all-alignments` is given. On the 1.09 M read test sample this avoids a 337 MB gzip of 16.6 M alignments: mapping of the candidate reads plus best-alignment selection took about 55 s instead of about 5 min
 - **`scripts/select_best_alignments.py`**: keeps only the best alignment of the current read in memory and parses the tags with string searches instead of splitting every line (about 2x faster)
 
+### Fixed
+
+- **`shell/MakeRef.sh`**: no longer activates the hard-coded conda environment `/media/inter/pipelines/ECMSD_old/scripts/conda_env`, which broke `--create-db`, `--update-db` and `--extend-db` on every other machine; database jobs now run in the environment ECMSD was started from
+
 ---
 
 ## v1.3.3 — Audit fixes (2026-10-25)
