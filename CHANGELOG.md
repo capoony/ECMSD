@@ -29,6 +29,7 @@
 
 ### Changed
 
+- **`shell/MakeRef.sh`**: `--force-rebuild` on a complete database now runs the staged `--update-db` build without the release check, so the old database stays usable until the swap and the extra references are re-checked against the new taxonomy; it needs the disk space of a full build next to the existing database. A missing or incomplete database is still discarded and built in place
 - **`ECMSD.sh`**: the default `--cov-threshold` is 25% again (it was 5% since v1.3.3). With the discriminatory-evidence step, 5% still reported two spurious taxa with 5-8% breadth on the test sample; 25% reports only *D. melanogaster* and *G. bimaculatus*. Because breadth depends on depth, a rare species can fall below 25% in a shallow sample (*G. bimaculatus* at 10% of the reads: 19%); lower it for such samples
 - **`ECMSD.sh`**: the default `-q/--mapping_quality` is now 0 (no MAPQ filtering) and drops reads whose compatible alignments all have a lower MAPQ. It was 20 and applied to a single `--secondary=no` pass, which discarded correct reads with ambiguous (MAPQ 0) alignments between related mitogenomes
 - **`ECMSD.sh`**: the `sr` chaining thresholds are relaxed to `-n 1 -m 20 -s 20` (preset: `-n 2 -m 25 -s 40`); with the preset values reads under ~30 bp are almost never mapped. A first choice of `-m 10` aligned 85% of the reads of the test sample, 14% of them with AS < 40; `-m 20` aligns 59% and none of them

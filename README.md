@@ -130,7 +130,7 @@ Running `--create-db` against an existing, complete database is a no-op: it repo
 ECMSD --create-db --force-rebuild --db-folder /path/to/db_folder
 ```
 
-This discards the existing database files and downloads everything again. Only files ECMSD created are removed, so a database folder shared with other content is left otherwise intact. Do not use `--force-rebuild` while other ECMSD jobs are reading the same database folder.
+This downloads everything again, even when the RefSeq release is unchanged. A complete database is rebuilt the way `--update-db` does it (in `update.new/`, old database usable until the swap, extra references re-checked against the new taxonomy), which needs the disk space of a full build next to the existing database. A missing or incomplete database is discarded and built in place; only files ECMSD created are removed, so a database folder shared with other content is left otherwise intact. Results of one study should still come from one database version, so do not rebuild while a workflow is running.
 
 > **Why is the database a separate step?**
 > Separating database creation from analysis prevents race conditions when multiple ECMSD instances run in parallel (e.g. in a Snakemake workflow). If each job built its own database, they would compete to create the same files. Because the database is built once upfront, each analysis job only reads from the shared, pre-built database. This also enables pipelines such as the **[pastForward Snakemake pipeline](https://github.com/SarahSaadain/PastForward)** to run contamination checks from scratch, downloading all required reference files in a single dedicated setup step before launching parallel analysis jobs.
@@ -295,7 +295,7 @@ Only `confident` rows of `Mito_calls.txt` are species calls. The limits below we
 
 - `-z, --create-db`: Create a new reference database
 - `-d, --db-folder`: Path to the folder where the database will be stored
-- `-b, --force-rebuild`: Optional. Discard an existing database and rebuild it from scratch (implies `--create-db`). Extra references are kept
+- `-b, --force-rebuild`: Optional. Rebuild the database from scratch even if it is current (implies `--create-db`). Staged like `--update-db` when the database is complete. Extra references are kept
 
 #### Managing the Database
 

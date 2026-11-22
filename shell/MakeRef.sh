@@ -6,7 +6,8 @@ set -euo pipefail
 WD=$1
 SCRIPT_DIR=$2
 threads=$3
-# Mode: build (default), rebuild (discard and build from scratch), extend (add the
+# Mode: build (default), rebuild (build again from scratch, staged like update when the
+# database is complete, in place otherwise), extend (add the
 # references of $6, a FASTA or accession list as named by $5) or update (rebuild against
 # the current NCBI release in a staging folder and swap the files in at the end).
 # "yes"/"no" are the old force-rebuild values.
@@ -404,7 +405,8 @@ extend_database() {
 # Function to update the database (--update-db). Builds the new release in a staging
 # folder while the old database stays in use, then moves the finished files in. The
 # new taxonomy also covers the old references, so a job running during the swap that
-# mapped against the old FASTA still finds its lineages.
+# mapped against the old FASTA still finds its lineages. With argument "force" (used by
+# --force-rebuild) the build runs even when the release is unchanged.
 update_database() {
     if ! database_complete; then
         echo "Error: no complete database in ${WD}. Run ECMSD --create-db first."
@@ -413,7 +415,7 @@ update_database() {
     local current latest built extended
     current=$(info_get refseq_release)
     latest=$(wget -qO- "${RELEASE_URL}") || latest=""
-    if [ -n "${latest}" ] && [ "${latest}" = "${current}" ]; then
+    if [ "${1:-}" != force ] && [ -n "${latest}" ] && [ "${latest}" = "${current}" ]; then
         echo "Database is current (RefSeq release ${current})."
         return
     fi
@@ -485,7 +487,12 @@ update)
     exit 0
     ;;
 rebuild)
-    # Discard whatever is there and fall through to a full rebuild
+    # A complete database is rebuilt in the staging folder and the old one stays usable
+    # until the swap. Only a missing or broken one is discarded and built in place.
+    if database_complete; then
+        update_database force
+        exit 0
+    fi
     reset_database
     ;;
 build)

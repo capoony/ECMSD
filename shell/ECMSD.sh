@@ -22,7 +22,7 @@ REQUIRED ARGUMENTS FOR ANALYSIS (choose one):
 REQUIRED ARGUMENTS FOR BUILDING DATABASE:
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
-  -b | --force-rebuild                      Optional: discard an existing database and rebuild it from scratch
+  -b | --force-rebuild                      Optional: rebuild the database from scratch even if it is current
 
 MANAGING THE DATABASE:
      | --update-db                          Rebuild against the current NCBI release if it is newer; extra references are kept
@@ -59,7 +59,7 @@ ALL ARGUMENTS:
   -k | --skip-mapping                       Skip mapping and coverage steps; reuse existing PAF and coverage files (implies --force)
   -z | --create-db                          Create a new database
   -d | --db-folder DB_FOLDER                Folder for the database
-  -b | --force-rebuild                      Discard an existing database and rebuild it from scratch (implies --create-db)
+  -b | --force-rebuild                      Rebuild the database from scratch even if it is current (implies --create-db)
      | --update-db                          Update the database to the current NCBI release (built in DB_FOLDER/update.new, then swapped in)
      | --extend-db                          Add references from --fasta FASTA (headers >taxid|id) or --accessions FILE
 
