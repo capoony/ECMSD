@@ -76,6 +76,12 @@ class ExtendRefsTests(unittest.TestCase):
         self.assertEqual([i for _, i, _ in out], ["AF5.1"])
         self.assertEqual(out[0][2], "-")
 
+    def test_taxid_already_in_database_is_noted(self):
+        out = [(t, n) for t, _, _, n in er.check([("7240|A.1", "A" * 6000), ("7226|B.1", "A" * 6000)],
+                                                  self.known, self.remap, set(), {"7240": 2})]
+        self.assertIn("already has 2 reference(s)", out[0][1])
+        self.assertEqual(out[1][1], "-")
+
     def test_short_and_refseq_records_are_kept_with_a_note(self):
         out = self.run_check([("7240|NC_1.1", "A" * 100)])
         self.assertIn("only 100 bp", out[0][2])

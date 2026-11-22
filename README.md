@@ -172,7 +172,7 @@ ECMSD --extend-db --accessions accessions.txt --db-folder DB
 ECMSD --extend-db --fasta my_mitogenomes.fa --db-folder DB
 ```
 
-- The new sequences go into `extra_refs.fna.gz`; RefSeq is not changed. `extensions.log` lists every added sequence with date, source, taxid, length and warnings. Delete `extra_refs.fna.gz` to undo all extensions (the extra taxonomy lines are harmless).
+- The new sequences go into `extra_refs.fna.gz`; RefSeq is not changed. `extensions.log` lists every added sequence with date, source, taxid, length and warnings (for example `cut -f4 DB/extensions.log` lists the added taxids). A taxid that already has references in RefSeq or in an earlier extension is still added, with the note `taxid N already has K reference(s) in the database`, so you see which taxids were new. Delete `extra_refs.fna.gz` to undo all extensions (the extra taxonomy lines are harmless).
 - Each record is checked against the stored taxonomy: unknown taxids are rejected, merged taxids are replaced, ids already in the database are skipped, and sequences under 5 kb and RefSeq `NC_` accessions are added with a warning. Low-complexity regions are masked as in the main database.
 - With several references of one taxid, the analysis turns on `--group-by-taxid` and sets `--max-alns` to 20 plus the largest number of references of one taxid, unless you set it.
 - Only add what you have a reason to expect. A mitochondrial haplotype that introgressed from another species gives the species of the mitochondrion, not of the nuclear genome: a simulated *D. mauritiana* sample with the maI haplotype, which is almost identical to *D. simulans* siIII, is called *D. simulans* with confidence once siIII is in the database.

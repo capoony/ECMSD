@@ -7,6 +7,7 @@ Every record is checked against the full NCBI taxonomy of the database:
   - taxids merged into another taxid (merged.dmp) are replaced by the current one;
   - taxids not in the taxonomy are rejected;
   - ids already in the existing extra references or repeated in the input are skipped;
+  - taxids that already have references (RefSeq or earlier extensions) are kept with a note;
   - records shorter than 5 kb and RefSeq NC_ accessions (probably already in the
     database) are kept with a warning.
 Writes the accepted records with headers <taxid>|<id> (unmasked, for bbmask) and a
@@ -69,6 +70,18 @@ def existing_ids(path):
         return {line[1:].split()[0].split("|", 1)[-1] for line in fh if line.startswith(">")}
 
 
+def taxid_counts(*paths):
+    """taxid -> number of references with that taxid in the given <taxid>|<id> FASTA files."""
+    counts = {}
+    for path in filter(None, paths):
+        with opener(path) as fh:
+            for line in fh:
+                if line.startswith(">"):
+                    t = line[1:].split("|", 1)[0]
+                    counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
 def post(tool, **params):
     data = urllib.parse.urlencode(dict(db="nuccore", tool="ECMSD", **params)).encode()
     for attempt in range(3):
@@ -103,7 +116,7 @@ def fetch_accessions(accs):
         time.sleep(0.4)
 
 
-def check(records, known, remap, skip_ids):
+def check(records, known, remap, skip_ids, have=None):
     """Yield (taxid, id, seq, note) for accepted records; print why others are dropped."""
     seen = set(skip_ids)
     for header, seq in records:
@@ -127,6 +140,8 @@ def check(records, known, remap, skip_ids):
         if not seq:
             print(f"Rejected {rid}: empty sequence.", file=sys.stderr)
             continue
+        if have and have.get(taxid):
+            notes.append(f"taxid {taxid} already has {have[taxid]} reference(s) in the database")
         if len(seq) < MIN_LEN:
             notes.append(f"only {len(seq)} bp, probably not a complete mitogenome")
         if rid.startswith("NC_"):
@@ -144,6 +159,7 @@ def main(argv=None):
     p.add_argument("--nodes", required=True, help="full nodes.dmp(.gz)")
     p.add_argument("--merged", help="merged.dmp(.gz)")
     p.add_argument("--existing", help="existing extra references (skip their ids)")
+    p.add_argument("--refs", help="main reference FASTA (to note taxids that are already in)")
     p.add_argument("--output", required=True, help="accepted records (FASTA)")
     p.add_argument("--log", required=True, help="accepted records (TSV: id, taxid, length, note)")
     a = p.parse_args(argv)
@@ -157,7 +173,8 @@ def main(argv=None):
         records = list(fetch_accessions(accs))
     n = 0
     with open(a.output, "w") as out, open(a.log, "w") as log:
-        for taxid, rid, seq, note in check(records, known, remap, existing_ids(a.existing)):
+        for taxid, rid, seq, note in check(records, known, remap, existing_ids(a.existing),
+                                                      taxid_counts(a.refs, a.existing)):
             out.write(f">{taxid}|{rid}\n")
             for i in range(0, len(seq), 80):
                 out.write(seq[i:i + 80] + "\n")

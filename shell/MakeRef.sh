@@ -374,7 +374,7 @@ extend_database() {
 
     echo "Checking the new references... "
     python3 "${SCRIPT_DIR}/extend_refs.py" "--${kind}" "${input}" \
-        --nodes "${FULL_NODES}" --merged "${FULL_MERGED}" \
+        --nodes "${FULL_NODES}" --merged "${FULL_MERGED}" --refs "${REF_FILE}" \
         $([ -f "${EXTRA_FILE}" ] && echo --existing "${EXTRA_FILE}") \
         --output extra_new.fna --log extra_new.tsv
     if [ ! -s extra_new.fna ]; then
